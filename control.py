@@ -37,6 +37,21 @@ setup()
 reset()
 write(3, 42)
 
+#for i in range(17):
+#	bitid = i%8
+#	byteid = int(i/8)
+#	write(byteid, (1<<(bitid+1))-1)
+#	sleep(0.2)
+#	#write(byteid, 0)
+
+write(0,0xff)
+write(1,0xff)
+write(2,1)
+sleep(0.01)
+write(0,0)
+write(1,0)
+write(2,0)
+
 adc=dev.getAnalogIn()
 while True:
 	v1s = []
