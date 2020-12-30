@@ -37,3 +37,18 @@ setup()
 reset()
 write(3, 42)
 
+adc=dev.getAnalogIn()
+while True:
+	v1s = []
+	v2s = []
+
+	for i in range(4):
+		#print(i)
+		write(3, i<<6)
+		sleep(0.1)
+		v1s += [adc.getVoltage(0)]
+		v2s += [adc.getVoltage(1)]
+		sleep(0.01)
+
+	vs = v1s+v2s
+	print("%s" % ["%6.3f"%vs[i] for i in [2,3,0,1,5,6,7,4]])
