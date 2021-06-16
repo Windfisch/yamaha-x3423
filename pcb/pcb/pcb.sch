@@ -459,18 +459,6 @@ Wire Wire Line
 Wire Wire Line
 	7200 2575 8100 2575
 $Comp
-L power:GND #PWR047
-U 1 1 60F1F258
-P 8100 2575
-F 0 "#PWR047" H 8100 2325 50  0001 C CNN
-F 1 "GND" H 8105 2402 50  0000 C CNN
-F 2 "" H 8100 2575 50  0001 C CNN
-F 3 "" H 8100 2575 50  0001 C CNN
-	1    8100 2575
-	1    0    0    -1  
-$EndComp
-Connection ~ 8100 2575
-$Comp
 L power:VCC #PWR046
 U 1 1 60F1FB18
 P 8100 1775
@@ -521,28 +509,6 @@ F 3 "" H 6225 3375 50  0001 C CNN
 $EndComp
 Wire Wire Line
 	5825 2875 5825 3375
-$Comp
-L Amplifier_Operational:LM324 U4
-U 1 1 60F5EE6A
-P 9325 1725
-F 0 "U4" H 9400 1925 50  0000 C CNN
-F 1 "LM324" H 9425 1575 50  0000 C CNN
-F 2 "Package_DIP:DIP-14_W7.62mm" H 9275 1825 50  0001 C CNN
-F 3 "http://www.ti.com/lit/ds/symlink/lm2902-n.pdf" H 9375 1925 50  0001 C CNN
-	1    9325 1725
-	1    0    0    -1  
-$EndComp
-$Comp
-L Amplifier_Operational:LM324 U4
-U 5 1 60F617A5
-P 9325 1725
-F 0 "U4" H 9283 1725 50  0001 L CNN
-F 1 "LM324" H 9283 1680 50  0001 L CNN
-F 2 "Package_DIP:DIP-14_W7.62mm" H 9275 1825 50  0001 C CNN
-F 3 "http://www.ti.com/lit/ds/symlink/lm2902-n.pdf" H 9375 1925 50  0001 C CNN
-	5    9325 1725
-	1    0    0    -1  
-$EndComp
 $Comp
 L power:+15V #PWR049
 U 1 1 60F64F72
@@ -613,7 +579,6 @@ F 3 "" H 4100 4325 50  0001 C CNN
 	1    4100 4325
 	1    0    0    -1  
 $EndComp
-NoConn ~ 4100 2225
 NoConn ~ 3800 2225
 $Comp
 L power:GNDA #PWR024
@@ -889,17 +854,6 @@ NoConn ~ 8250 4775
 NoConn ~ 8850 4775
 Wire Wire Line
 	9625 2375 9625 2325
-$Comp
-L power:GND #PWR051
-U 1 1 612AA6BC
-P 9625 2675
-F 0 "#PWR051" H 9625 2425 50  0001 C CNN
-F 1 "GND" H 9630 2502 50  0000 C CNN
-F 2 "" H 9625 2675 50  0001 C CNN
-F 3 "" H 9625 2675 50  0001 C CNN
-	1    9625 2675
-	1    0    0    -1  
-$EndComp
 Wire Wire Line
 	9625 2325 9025 2325
 Wire Wire Line
@@ -1664,17 +1618,6 @@ Wire Wire Line
 Wire Wire Line
 	1375 7425 1600 7425
 $Comp
-L bluepill:DD39AJPA A1
-U 1 1 614B1B14
-P 2150 7325
-F 0 "A1" H 2125 7650 50  0000 C CNN
-F 1 "DD39AJPA" H 2125 7559 50  0000 C CNN
-F 2 "footprints:DD39AJPA" H 2150 7325 50  0001 C CNN
-F 3 "" H 2150 7325 50  0001 C CNN
-	1    2150 7325
-	1    0    0    -1  
-$EndComp
-$Comp
 L power:GNDPWR #PWR020
 U 1 1 614769FE
 P 1600 7425
@@ -1711,6 +1654,160 @@ F 3 "~" H 1125 7285 50  0001 C CNN
 	1    1075 7325
 	1    0    0    -1  
 $EndComp
+$Comp
+L Connector_Generic:Conn_01x02 J101
+U 1 1 60CEB0CE
+P 1800 7275
+F 0 "J101" H 1880 7267 50  0000 L CNN
+F 1 "Conn_01x02" H 1880 7176 50  0000 L CNN
+F 2 "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical" H 1800 7275 50  0001 C CNN
+F 3 "~" H 1800 7275 50  0001 C CNN
+	1    1800 7275
+	1    0    0    -1  
+$EndComp
+$Comp
+L Connector_Generic:Conn_01x03 J102
+U 1 1 60CEE5AD
+P 2450 7325
+F 0 "J102" H 2368 7000 50  0000 C CNN
+F 1 "Conn_01x03" H 2368 7091 50  0000 C CNN
+F 2 "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical" H 2450 7325 50  0001 C CNN
+F 3 "~" H 2450 7325 50  0001 C CNN
+	1    2450 7325
+	-1   0    0    1   
+$EndComp
+$Comp
+L Regulator_Linear:LM7805_TO220 U101
+U 1 1 60D0B8E5
+P 3300 1850
+F 0 "U101" H 3300 2092 50  0000 C CNN
+F 1 "do not equip" H 3300 2001 50  0000 C CNN
+F 2 "Package_TO_SOT_THT:TO-220-3_Horizontal_TabDown" H 3300 2075 50  0001 C CIN
+F 3 "https://www.onsemi.cn/PowerSolutions/document/MC7800-D.PDF" H 3300 1800 50  0001 C CNN
+	1    3300 1850
+	1    0    0    -1  
+$EndComp
+$Comp
+L power:+VDC #PWR0101
+U 1 1 60D13602
+P 3000 1850
+F 0 "#PWR0101" H 3000 1750 50  0001 C CNN
+F 1 "+VDC" H 3000 2125 50  0000 C CNN
+F 2 "" H 3000 1850 50  0001 C CNN
+F 3 "" H 3000 1850 50  0001 C CNN
+	1    3000 1850
+	1    0    0    -1  
+$EndComp
+$Comp
+L power:GND #PWR0102
+U 1 1 60D14706
+P 3300 2150
+F 0 "#PWR0102" H 3300 1900 50  0001 C CNN
+F 1 "GND" H 3350 1975 50  0000 C CNN
+F 2 "" H 3300 2150 50  0001 C CNN
+F 3 "" H 3300 2150 50  0001 C CNN
+	1    3300 2150
+	1    0    0    -1  
+$EndComp
+$Comp
+L Jumper:Jumper_3_Bridged12 JP101
+U 1 1 60D1BB6F
+P 3850 1850
+F 0 "JP101" H 3850 1961 50  0000 C CNN
+F 1 "Jumper_3_Bridged12" H 3850 2052 50  0000 C CNN
+F 2 "footprints:SolderDipJumper3alt" H 3850 1850 50  0001 C CNN
+F 3 "~" H 3850 1850 50  0001 C CNN
+	1    3850 1850
+	-1   0    0    1   
+$EndComp
+Wire Wire Line
+	4100 1850 4100 2225
+$Comp
+L power:+5V #PWR0103
+U 1 1 60DCE804
+P 3850 1700
+F 0 "#PWR0103" H 3850 1550 50  0001 C CNN
+F 1 "+5V" H 3865 1873 50  0000 C CNN
+F 2 "" H 3850 1700 50  0001 C CNN
+F 3 "" H 3850 1700 50  0001 C CNN
+	1    3850 1700
+	1    0    0    -1  
+$EndComp
+$Comp
+L power:GNDA #PWR0104
+U 1 1 60E07F1C
+P 8100 2575
+F 0 "#PWR0104" H 8100 2325 50  0001 C CNN
+F 1 "GNDA" H 8105 2402 50  0000 C CNN
+F 2 "" H 8100 2575 50  0001 C CNN
+F 3 "" H 8100 2575 50  0001 C CNN
+	1    8100 2575
+	1    0    0    -1  
+$EndComp
+Connection ~ 8100 2575
+$Comp
+L power:GNDA #PWR0105
+U 1 1 60E0E8CF
+P 9625 2675
+F 0 "#PWR0105" H 9625 2425 50  0001 C CNN
+F 1 "GNDA" H 9630 2502 50  0000 C CNN
+F 2 "" H 9625 2675 50  0001 C CNN
+F 3 "" H 9625 2675 50  0001 C CNN
+	1    9625 2675
+	1    0    0    -1  
+$EndComp
+$Comp
+L Amplifier_Operational:LM358 U4
+U 1 1 60E3D864
+P 9325 1725
+F 0 "U4" H 9325 2000 50  0000 C CNN
+F 1 "LM358" H 9325 2001 50  0001 C CNN
+F 2 "Package_DIP:DIP-8_W7.62mm" H 9325 1725 50  0001 C CNN
+F 3 "http://www.ti.com/lit/ds/symlink/lm2904-n.pdf" H 9325 1725 50  0001 C CNN
+	1    9325 1725
+	1    0    0    -1  
+$EndComp
+$Comp
+L Amplifier_Operational:LM358 U4
+U 3 1 60E401C0
+P 9325 1725
+F 0 "U4" H 9375 1875 50  0001 L CNN
+F 1 "LM358" H 9250 1725 50  0000 L CNN
+F 2 "Package_DIP:DIP-8_W7.62mm" H 9325 1725 50  0001 C CNN
+F 3 "http://www.ti.com/lit/ds/symlink/lm2904-n.pdf" H 9325 1725 50  0001 C CNN
+	3    9325 1725
+	1    0    0    -1  
+$EndComp
+$Comp
+L Amplifier_Operational:LM358 U4
+U 2 1 60E41959
+P 10500 3975
+F 0 "U4" H 10500 4342 50  0000 C CNN
+F 1 "LM358" H 10500 4251 50  0000 C CNN
+F 2 "Package_DIP:DIP-8_W7.62mm" H 10500 3975 50  0001 C CNN
+F 3 "http://www.ti.com/lit/ds/symlink/lm2904-n.pdf" H 10500 3975 50  0001 C CNN
+	2    10500 3975
+	1    0    0    -1  
+$EndComp
+Wire Wire Line
+	10200 4075 10200 4250
+Wire Wire Line
+	10200 4250 10800 4250
+Wire Wire Line
+	10800 4250 10800 3975
+$Comp
+L power:GNDA #PWR0106
+U 1 1 60E622F6
+P 10100 3875
+F 0 "#PWR0106" H 10100 3625 50  0001 C CNN
+F 1 "GNDA" H 10105 3702 50  0000 C CNN
+F 2 "" H 10100 3875 50  0001 C CNN
+F 3 "" H 10100 3875 50  0001 C CNN
+	1    10100 3875
+	1    0    0    -1  
+$EndComp
+Wire Wire Line
+	10100 3875 10200 3875
 Wire Wire Line
 	4700 2875 5825 2875
 Wire Bus Line
