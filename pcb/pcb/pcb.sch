@@ -1655,10 +1655,10 @@ F 3 "~" H 1125 7285 50  0001 C CNN
 	1    0    0    -1  
 $EndComp
 $Comp
-L Connector_Generic:Conn_01x02 J101
+L Connector_Generic:Conn_01x02 J17
 U 1 1 60CEB0CE
 P 1800 7275
-F 0 "J101" H 1880 7267 50  0000 L CNN
+F 0 "J17" H 1880 7267 50  0000 L CNN
 F 1 "Conn_01x02" H 1880 7176 50  0000 L CNN
 F 2 "Connector_JST:JST_XH_B2B-XH-A_1x02_P2.50mm_Vertical" H 1800 7275 50  0001 C CNN
 F 3 "~" H 1800 7275 50  0001 C CNN
@@ -1666,26 +1666,15 @@ F 3 "~" H 1800 7275 50  0001 C CNN
 	1    0    0    -1  
 $EndComp
 $Comp
-L Connector_Generic:Conn_01x03 J102
+L Connector_Generic:Conn_01x03 J16
 U 1 1 60CEE5AD
 P 2450 7325
-F 0 "J102" H 2368 7000 50  0000 C CNN
+F 0 "J16" H 2368 7000 50  0000 C CNN
 F 1 "Conn_01x03" H 2368 7091 50  0000 C CNN
 F 2 "Connector_JST:JST_XH_B3B-XH-A_1x03_P2.50mm_Vertical" H 2450 7325 50  0001 C CNN
 F 3 "~" H 2450 7325 50  0001 C CNN
 	1    2450 7325
 	-1   0    0    1   
-$EndComp
-$Comp
-L Regulator_Linear:LM7805_TO220 U101
-U 1 1 60D0B8E5
-P 3300 1850
-F 0 "U101" H 3300 2092 50  0000 C CNN
-F 1 "do not equip" H 3300 2001 50  0000 C CNN
-F 2 "Package_TO_SOT_THT:TO-220-3_Horizontal_TabDown" H 3300 2075 50  0001 C CIN
-F 3 "https://www.onsemi.cn/PowerSolutions/document/MC7800-D.PDF" H 3300 1800 50  0001 C CNN
-	1    3300 1850
-	1    0    0    -1  
 $EndComp
 $Comp
 L power:+VDC #PWR0101
@@ -1710,10 +1699,10 @@ F 3 "" H 3300 2150 50  0001 C CNN
 	1    0    0    -1  
 $EndComp
 $Comp
-L Jumper:Jumper_3_Bridged12 JP101
+L Jumper:Jumper_3_Bridged12 JP5
 U 1 1 60D1BB6F
 P 3850 1850
-F 0 "JP101" H 3850 1961 50  0000 C CNN
+F 0 "JP5" H 3850 1961 50  0000 C CNN
 F 1 "Jumper_3_Bridged12" H 3850 2052 50  0000 C CNN
 F 2 "footprints:SolderDipJumper3alt" H 3850 1850 50  0001 C CNN
 F 3 "~" H 3850 1850 50  0001 C CNN
@@ -1816,4 +1805,15 @@ Wire Bus Line
 	1275 3625 1275 5225
 Wire Bus Line
 	5050 2575 5050 5225
+$Comp
+L Regulator_Linear:LM7805_TO220 U5
+U 1 1 60D0B8E5
+P 3300 1850
+F 0 "U5" H 3300 2092 50  0000 C CNN
+F 1 "do not equip" H 3300 2001 50  0000 C CNN
+F 2 "Package_TO_SOT_THT:TO-220-3_Horizontal_TabDown" H 3300 2075 50  0001 C CIN
+F 3 "https://www.onsemi.cn/PowerSolutions/document/MC7800-D.PDF" H 3300 1800 50  0001 C CNN
+	1    3300 1850
+	1    0    0    -1  
+$EndComp
 $EndSCHEMATC
