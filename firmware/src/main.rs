@@ -13,6 +13,8 @@ use stm32f1xx_hal::prelude::*;
 use stm32f1xx_hal::delay::Delay;
 use core::convert::Infallible;
 
+use micromath::F32Ext;
+
 const PERIOD: u32 = 100_000_000;
 
 struct X3423DataPins {
@@ -58,7 +60,7 @@ impl<T: OutputPin> OutputPinExt for T {
 }
 
 fn wait() {
-	cortex_m::asm::delay(200);
+	cortex_m::asm::delay(10);
 }
 
 impl X3423DataPins {
@@ -94,13 +96,13 @@ impl X3423 {
 		self.data.apply_data(dasel | (dainh << 3) | (adsel << 6), &mut self.fd3);
 	}
 
-	pub fn capture_analog_value(&mut self, index: u8) {
+	pub fn capture_analog_value(&mut self, index: u8, delay: &mut embedded_hal::blocking::delay::DelayUs<u32>) {
 		assert!(index < 17);
 		let dasel = index & 7;
 		let dainh = !(1 << (index >> 3));
 		let adsel = 0;
 		self.set_other(dasel, dainh, adsel);
-		cortex_m::asm::delay(10000);
+		delay.delay_us(1000);
 		self.set_other(dasel, 7, adsel);
 	}
 }
@@ -151,8 +153,6 @@ const APP: () = {
 
 		let mut dac = mcp49xx::Mcp49xx::new_mcp4822(spi, dac_cs);
 
-		dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value(0xFFF));
-
 		let mut resources = init::LateResources {
 			led,
 			x3423: X3423 {
@@ -182,13 +182,26 @@ const APP: () = {
 		cortex_m::asm::delay(5);
 		resources.x3423.reset.set_high();
 
-		resources.x3423.capture_analog_value(2);
-		
-		for i in 0..18 {
-			resources.x3423.set_motor_enable(3 << i);
-			delay.delay_ms(400_u16);
-			resources.x3423.set_motor_enable(0);
+		for i in 0..17 {
+			//dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value(i as u16 * 0xbFF / 16));
+			dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value(
+				((f32::sin(i as f32 / 17. * core::f32::consts::PI * 2.) / 2. + 0.5 ) * 2600. + 256.) as u16
+			));
+			delay.delay_us(5_u16);
+			resources.x3423.capture_analog_value(i, &mut delay);
 		}
+	
+		
+		resources.x3423.set_motor_enable(0x1FFFF);
+		delay.delay_ms(1000_u16);
+		resources.x3423.set_motor_enable(0);
+
+		/*for i in 0..17 {
+			resources.x3423.set_motor_enable(1 << i);
+			delay.delay_ms(2000_u16);
+		}
+		resources.x3423.set_motor_enable(0);
+		*/
 		
 		/*delay.delay_ms(1000_u16);
 		resources.x3423.set_motor_enable(0x1FFFF);
