@@ -216,6 +216,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mcp49xx"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d99ca7b92932be1bfb32702142964a8d052ebfd53df7942b883d69a706608ea0"
+dependencies = [
+ "embedded-hal",
+]
+
+[[package]]
 name = "nb"
 version = "0.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -411,6 +420,7 @@ dependencies = [
  "cortex-m-rt",
  "cortex-m-rtic",
  "embedded-hal",
+ "mcp49xx",
  "panic-halt",
  "stm32f1xx-hal",
 ]

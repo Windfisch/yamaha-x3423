@@ -4,14 +4,27 @@
 
 extern crate panic_halt;
 use embedded_hal::digital::v2::OutputPin;
+use embedded_hal::digital::v1_compat::OldOutputPin;
 use rtic::app;
 use rtic::cyccnt::U32Ext;
 use stm32f1xx_hal::gpio::{gpioa::*, gpiob::*, gpioc::*, Input, Floating, Analog, Output, PushPull, OpenDrain, State};
+use stm32f1xx_hal::spi;
 use stm32f1xx_hal::prelude::*;
 use stm32f1xx_hal::delay::Delay;
 use core::convert::Infallible;
 
 const PERIOD: u32 = 100_000_000;
+
+struct X3423DataPins {
+	d0: PB4<Output<OpenDrain>>,
+	d1: PB6<Output<OpenDrain>>,
+	d2: PB7<Output<OpenDrain>>,
+	d3: PB8<Output<OpenDrain>>,
+	d4: PB9<Output<OpenDrain>>,
+	d5: PB10<Output<OpenDrain>>,
+	d6: PB11<Output<OpenDrain>>,
+	d7: PB12<Output<OpenDrain>>,
+}
 
 pub struct X3423 {
 	mfpos0: PA5<Analog>,
@@ -24,14 +37,7 @@ pub struct X3423 {
 	fd1: PA9<Output<OpenDrain>>,
 	fd2: PA10<Output<OpenDrain>>,
 	fd3: PA15<Output<OpenDrain>>,
-	d0: PB4<Output<OpenDrain>>,
-	d1: PB6<Output<OpenDrain>>,
-	d2: PB7<Output<OpenDrain>>,
-	d3: PB8<Output<OpenDrain>>,
-	d4: PB9<Output<OpenDrain>>,
-	d5: PB10<Output<OpenDrain>>,
-	d6: PB11<Output<OpenDrain>>,
-	d7: PB12<Output<OpenDrain>>,
+	data: X3423DataPins,
 }
 
 trait OutputPinExt {
@@ -55,8 +61,7 @@ fn wait() {
 	cortex_m::asm::delay(200);
 }
 
-
-impl X3423 {
+impl X3423DataPins {
 	fn write_data(&mut self, data: u8) -> Result<(), Infallible> {
 		self.d0.set(data & 0x01 != 0)?;
 		self.d1.set(data & 0x02 != 0)?;
@@ -68,25 +73,35 @@ impl X3423 {
 		self.d7.set(data & 0x80 != 0)?;
 		Ok(())
 	}
+	
+	fn apply_data(&mut self, data: u8, fd_pin: &mut impl embedded_hal::digital::v2::OutputPin) {
+		self.write_data(data).unwrap();
+		wait();
+		fd_pin.set_high();
+		wait();
+		fd_pin.set_low();
+	}
+}
 
+impl X3423 {
 	pub fn set_motor_enable(&mut self, state: u32) {
-		self.write_data((state & 0xFF) as u8).unwrap();
-		wait();
-		self.fd0.set_high();
-		wait();
-		self.fd0.set_low();
-		
-		self.write_data(((state >> 8) & 0xFF) as u8).unwrap();
-		wait();
-		self.fd1.set_high();
-		wait();
-		self.fd1.set_low();
+		self.data.apply_data((state & 0xFF) as u8, &mut self.fd0);
+		self.data.apply_data(((state >> 8) & 0xFF) as u8, &mut self.fd1);
+		self.data.apply_data(((state >> 16) & 0x01) as u8, &mut self.fd2);
+	}
 
-		self.d0.set(state & 0x10000 != 0).unwrap();
-		wait();
-		self.fd2.set_high();
-		wait();
-		self.fd2.set_low();
+	fn set_other(&mut self, dasel: u8, dainh: u8, adsel: u8) {
+		self.data.apply_data(dasel | (dainh << 3) | (adsel << 6), &mut self.fd3);
+	}
+
+	pub fn capture_analog_value(&mut self, index: u8) {
+		assert!(index < 17);
+		let dasel = index & 7;
+		let dainh = !(1 << (index >> 3));
+		let adsel = 0;
+		self.set_other(dasel, dainh, adsel);
+		cortex_m::asm::delay(10000);
+		self.set_other(dasel, 7, adsel);
 	}
 }
 
@@ -128,6 +143,15 @@ const APP: () = {
 			.into_push_pull_output_with_state(&mut gpioc.crh, State::Low);
 		led.set_low().unwrap();
 
+		let mosi = gpiob.pb15.into_alternate_push_pull(&mut gpiob.crh);
+		let sck = gpiob.pb13.into_alternate_push_pull(&mut gpiob.crh);
+		let dac_cs: OldOutputPin<_> = gpioc.pc15.into_push_pull_output_with_state(&mut gpioc.crh, State::High).into();
+
+		let spi = spi::Spi::spi2(device.SPI2, (sck, spi::NoMiso, mosi), spi::Mode { phase : spi::Phase::CaptureOnFirstTransition, polarity : spi::Polarity::IdleLow }, 5.mhz(), clocks, &mut rcc.apb1);
+
+		let mut dac = mcp49xx::Mcp49xx::new_mcp4822(spi, dac_cs);
+
+		dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value(0xFFF));
 
 		let mut resources = init::LateResources {
 			led,
@@ -142,26 +166,28 @@ const APP: () = {
 				fd1: gpioa.pa9.into_open_drain_output(&mut gpioa.crh),
 				fd2: gpioa.pa10.into_open_drain_output(&mut gpioa.crh),
 				fd3: pa15.into_open_drain_output(&mut gpioa.crh),
-				d0: pb4.into_open_drain_output(&mut gpiob.crl),
-				d1: gpiob.pb6.into_open_drain_output(&mut gpiob.crl),
-				d2: gpiob.pb7.into_open_drain_output(&mut gpiob.crl),
-				d3: gpiob.pb8.into_open_drain_output(&mut gpiob.crh),
-				d4: gpiob.pb9.into_open_drain_output(&mut gpiob.crh),
-				d5: gpiob.pb10.into_open_drain_output(&mut gpiob.crh),
-				d6: gpiob.pb11.into_open_drain_output(&mut gpiob.crh),
-				d7: gpiob.pb12.into_open_drain_output(&mut gpiob.crh),
+				data: X3423DataPins {
+					d0: pb4.into_open_drain_output(&mut gpiob.crl),
+					d1: gpiob.pb6.into_open_drain_output(&mut gpiob.crl),
+					d2: gpiob.pb7.into_open_drain_output(&mut gpiob.crl),
+					d3: gpiob.pb8.into_open_drain_output(&mut gpiob.crh),
+					d4: gpiob.pb9.into_open_drain_output(&mut gpiob.crh),
+					d5: gpiob.pb10.into_open_drain_output(&mut gpiob.crh),
+					d6: gpiob.pb11.into_open_drain_output(&mut gpiob.crh),
+					d7: gpiob.pb12.into_open_drain_output(&mut gpiob.crh),
+				}
 			}
 		};
 
 		cortex_m::asm::delay(5);
 		resources.x3423.reset.set_high();
 
+		resources.x3423.capture_analog_value(2);
 		
 		for i in 0..18 {
 			resources.x3423.set_motor_enable(3 << i);
-			delay.delay_ms(50_u16);
+			delay.delay_ms(400_u16);
 			resources.x3423.set_motor_enable(0);
-			delay.delay_ms(1000_u16);
 		}
 		
 		/*delay.delay_ms(1000_u16);
