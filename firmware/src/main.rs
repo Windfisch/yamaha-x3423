@@ -182,18 +182,20 @@ const APP: () = {
 		cortex_m::asm::delay(5);
 		resources.x3423.reset.set_high();
 
-		for i in 0..17 {
-			//dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value(i as u16 * 0xbFF / 16));
-			dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value(
-				((f32::sin(i as f32 / 17. * core::f32::consts::PI * 2.) / 2. + 0.5 ) * 2600. + 256.) as u16
-			));
-			delay.delay_us(5_u16);
-			resources.x3423.capture_analog_value(i, &mut delay);
+		resources.x3423.set_motor_enable(0x1FFFF);
+		for frame in 0..800 {
+			for i in 0..17 {
+				//dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value(i as u16 * 0xbFF / 16));
+				dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value(
+					((f32::sin((frame as f32 /200. + i as f32 / 17.) * core::f32::consts::PI * 2.) / 2. + 0.5 ) * 2600. + 256.) as u16
+				));
+				delay.delay_us(5_u16);
+				resources.x3423.capture_analog_value(i, &mut delay);
+			}
 		}
 	
 		
-		resources.x3423.set_motor_enable(0x1FFFF);
-		delay.delay_ms(1000_u16);
+		//delay.delay_ms(1000_u16);
 		resources.x3423.set_motor_enable(0);
 
 		/*for i in 0..17 {
