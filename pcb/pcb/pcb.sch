@@ -6,7 +6,7 @@ encoding utf-8
 Sheet 1 1
 Title ""
 Date ""
-Rev ""
+Rev "02"
 Comp ""
 Comment1 ""
 Comment2 ""
@@ -35,16 +35,6 @@ F 3 "" H 3950 2225 50  0001 C CNN
 	1    3950 2225
 	1    0    0    -1  
 $EndComp
-Wire Wire Line
-	925  1925 2225 1925
-Wire Wire Line
-	925  2025 2150 2025
-Wire Wire Line
-	925  2125 2075 2125
-Wire Wire Line
-	925  2225 2000 2225
-Wire Wire Line
-	925  2325 1925 2325
 $Comp
 L Connector_Generic:Conn_01x34 J11
 U 1 1 60C7C3D1
@@ -605,16 +595,6 @@ $EndComp
 Text Notes 625  5100 1    50   ~ 0
 Note: the connector is reversed
 Wire Wire Line
-	2225 3275 3200 3275
-Wire Wire Line
-	2150 3375 3200 3375
-Wire Wire Line
-	2075 3475 3200 3475
-Wire Wire Line
-	2000 3575 3200 3575
-Wire Wire Line
-	1925 3675 3200 3675
-Wire Wire Line
 	4775 3400 5225 3400
 Wire Wire Line
 	4775 3500 5325 3500
@@ -652,16 +632,6 @@ F 3 "~" H 6275 5850 50  0001 C CNN
 	1    6275 5850
 	0    -1   1    0   
 $EndComp
-Wire Wire Line
-	2225 1925 2225 3275
-Wire Wire Line
-	2075 2125 2075 3475
-Wire Wire Line
-	2150 2025 2150 3375
-Wire Wire Line
-	2000 2225 2000 3575
-Wire Wire Line
-	1925 2325 1925 3675
 Wire Wire Line
 	2550 2875 3200 2875
 Wire Wire Line
@@ -1797,14 +1767,6 @@ F 3 "" H 10100 3875 50  0001 C CNN
 $EndComp
 Wire Wire Line
 	10100 3875 10200 3875
-Wire Wire Line
-	4700 2875 5825 2875
-Wire Bus Line
-	2850 3875 2850 5225
-Wire Bus Line
-	1275 3625 1275 5225
-Wire Bus Line
-	5050 2575 5050 5225
 $Comp
 L Regulator_Linear:LM7805_TO220 U5
 U 1 1 60D0B8E5
@@ -1814,6 +1776,220 @@ F 1 "do not equip" H 3300 2001 50  0000 C CNN
 F 2 "Package_TO_SOT_THT:TO-220-3_Horizontal_TabDown" H 3300 2075 50  0001 C CIN
 F 3 "https://www.onsemi.cn/PowerSolutions/document/MC7800-D.PDF" H 3300 1800 50  0001 C CNN
 	1    3300 1850
+	1    0    0    -1  
+$EndComp
+$Comp
+L Device:R R12
+U 1 1 60F9BFE2
+P 1725 1725
+F 0 "R12" V 1775 1975 50  0000 R CNN
+F 1 "10k" V 1725 1650 50  0000 L CNN
+F 2 "Resistor_SMD:R_0805_2012Metric" V 1655 1725 50  0001 C CNN
+F 3 "~" H 1725 1725 50  0001 C CNN
+	1    1725 1725
+	0    -1   -1   0   
+$EndComp
+$Comp
+L Device:R R17
+U 1 1 6101BE24
+P 2025 1725
+F 0 "R17" V 2075 1425 50  0000 L CNN
+F 1 "10k" V 2025 1650 50  0000 L CNN
+F 2 "Resistor_SMD:R_0805_2012Metric" V 1955 1725 50  0001 C CNN
+F 3 "~" H 2025 1725 50  0001 C CNN
+	1    2025 1725
+	0    -1   -1   0   
+$EndComp
+$Comp
+L Device:R R13
+U 1 1 6103691E
+P 1725 1900
+F 0 "R13" V 1775 2150 50  0000 R CNN
+F 1 "10k" V 1725 1825 50  0000 L CNN
+F 2 "Resistor_SMD:R_0805_2012Metric" V 1655 1900 50  0001 C CNN
+F 3 "~" H 1725 1900 50  0001 C CNN
+	1    1725 1900
+	0    -1   -1   0   
+$EndComp
+$Comp
+L Device:R R14
+U 1 1 61041291
+P 1725 2075
+F 0 "R14" V 1775 2325 50  0000 R CNN
+F 1 "10k" V 1725 2000 50  0000 L CNN
+F 2 "Resistor_SMD:R_0805_2012Metric" V 1655 2075 50  0001 C CNN
+F 3 "~" H 1725 2075 50  0001 C CNN
+	1    1725 2075
+	0    -1   -1   0   
+$EndComp
+$Comp
+L Device:R R19
+U 1 1 61041297
+P 2025 2075
+F 0 "R19" V 2075 1775 50  0000 L CNN
+F 1 "10k" V 2025 2000 50  0000 L CNN
+F 2 "Resistor_SMD:R_0805_2012Metric" V 1955 2075 50  0001 C CNN
+F 3 "~" H 2025 2075 50  0001 C CNN
+	1    2025 2075
+	0    -1   -1   0   
+$EndComp
+$Comp
+L Device:R R15
+U 1 1 6104BBEE
+P 1725 2250
+F 0 "R15" V 1775 2500 50  0000 R CNN
+F 1 "10k" V 1725 2175 50  0000 L CNN
+F 2 "Resistor_SMD:R_0805_2012Metric" V 1655 2250 50  0001 C CNN
+F 3 "~" H 1725 2250 50  0001 C CNN
+	1    1725 2250
+	0    -1   -1   0   
+$EndComp
+$Comp
+L Device:R R20
+U 1 1 6104BBF4
+P 2025 2250
+F 0 "R20" V 2075 1950 50  0000 L CNN
+F 1 "10k" V 2025 2175 50  0000 L CNN
+F 2 "Resistor_SMD:R_0805_2012Metric" V 1955 2250 50  0001 C CNN
+F 3 "~" H 2025 2250 50  0001 C CNN
+	1    2025 2250
+	0    -1   -1   0   
+$EndComp
+$Comp
+L Device:R R16
+U 1 1 61056599
+P 1725 2425
+F 0 "R16" V 1775 2675 50  0000 R CNN
+F 1 "10k" V 1725 2350 50  0000 L CNN
+F 2 "Resistor_SMD:R_0805_2012Metric" V 1655 2425 50  0001 C CNN
+F 3 "~" H 1725 2425 50  0001 C CNN
+	1    1725 2425
+	0    -1   -1   0   
+$EndComp
+$Comp
+L Device:R R21
+U 1 1 6105659F
+P 2025 2425
+F 0 "R21" V 2075 2125 50  0000 L CNN
+F 1 "10k" V 2025 2350 50  0000 L CNN
+F 2 "Resistor_SMD:R_0805_2012Metric" V 1955 2425 50  0001 C CNN
+F 3 "~" H 2025 2425 50  0001 C CNN
+	1    2025 2425
+	0    -1   -1   0   
+$EndComp
+Wire Wire Line
+	925  1925 1100 1925
+Wire Wire Line
+	1100 1925 1100 1725
+Wire Wire Line
+	1100 1725 1575 1725
+Wire Wire Line
+	925  2025 1175 2025
+Wire Wire Line
+	1175 2025 1175 1900
+Wire Wire Line
+	1175 1900 1575 1900
+Wire Wire Line
+	925  2125 1575 2125
+Wire Wire Line
+	1575 2125 1575 2075
+Wire Wire Line
+	925  2225 1575 2225
+Wire Wire Line
+	1575 2225 1575 2250
+Wire Wire Line
+	925  2325 1450 2325
+Wire Wire Line
+	1450 2325 1450 2425
+Wire Wire Line
+	1450 2425 1575 2425
+Wire Wire Line
+	2175 1725 2175 1900
+Connection ~ 2175 1900
+Wire Wire Line
+	2175 1900 2175 2075
+Connection ~ 2175 2075
+Wire Wire Line
+	2175 2075 2175 2250
+Connection ~ 2175 2250
+Wire Wire Line
+	2175 2250 2175 2425
+Connection ~ 2175 2425
+Wire Wire Line
+	2175 2425 2175 2550
+Wire Wire Line
+	1875 1725 1875 1800
+Wire Wire Line
+	1875 1800 2850 1800
+Wire Wire Line
+	2850 1800 2850 3275
+Wire Wire Line
+	2850 3275 3200 3275
+Connection ~ 1875 1725
+Wire Wire Line
+	3200 3375 2800 3375
+Wire Wire Line
+	2800 3375 2800 1975
+Wire Wire Line
+	2800 1975 1875 1975
+Wire Wire Line
+	1875 1975 1875 1900
+Connection ~ 1875 1900
+Wire Wire Line
+	1875 2075 1875 2175
+Wire Wire Line
+	1875 2175 2750 2175
+Wire Wire Line
+	2750 2175 2750 3475
+Wire Wire Line
+	2750 3475 3200 3475
+Connection ~ 1875 2075
+Wire Wire Line
+	2700 2325 1875 2325
+Wire Wire Line
+	1875 2325 1875 2250
+Connection ~ 1875 2250
+Wire Wire Line
+	1875 2425 1875 2500
+Wire Wire Line
+	1875 2500 2650 2500
+Wire Wire Line
+	2650 2500 2650 3675
+Wire Wire Line
+	2650 3675 3200 3675
+Connection ~ 1875 2425
+Wire Wire Line
+	2700 3575 3200 3575
+Wire Wire Line
+	2700 2325 2700 3575
+Wire Wire Line
+	4700 2875 5825 2875
+Wire Bus Line
+	2850 3875 2850 5225
+Wire Bus Line
+	1275 3625 1275 5225
+Wire Bus Line
+	5050 2575 5050 5225
+$Comp
+L Device:R R18
+U 1 1 61036924
+P 2025 1900
+F 0 "R18" V 2075 1600 50  0000 L CNN
+F 1 "10k" V 2025 1825 50  0000 L CNN
+F 2 "Resistor_SMD:R_0805_2012Metric" V 1955 1900 50  0001 C CNN
+F 3 "~" H 2025 1900 50  0001 C CNN
+	1    2025 1900
+	0    -1   -1   0   
+$EndComp
+$Comp
+L power:GNDA #PWR0107
+U 1 1 6115B9F4
+P 2175 2550
+F 0 "#PWR0107" H 2175 2300 50  0001 C CNN
+F 1 "GNDA" H 2350 2550 50  0000 C CNN
+F 2 "" H 2175 2550 50  0001 C CNN
+F 3 "" H 2175 2550 50  0001 C CNN
+	1    2175 2550
 	1    0    0    -1  
 $EndComp
 $EndSCHEMATC
