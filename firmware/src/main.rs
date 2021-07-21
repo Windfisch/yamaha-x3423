@@ -183,7 +183,7 @@ const APP: () = {
 		resources.x3423.reset.set_high();
 
 		resources.x3423.set_motor_enable(0x1FFFF);
-		for frame in 0..800 {
+		for frame in 0..100 {
 			for i in 0..17 {
 				//dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value(i as u16 * 0xbFF / 16));
 				dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value(
@@ -192,6 +192,38 @@ const APP: () = {
 				delay.delay_us(5_u16);
 				resources.x3423.capture_analog_value(i, &mut delay);
 			}
+		}
+
+		//resources.x3423.set_motor_enable( 0xa222 );
+		resources.x3423.set_motor_enable(2);
+
+		let mut adc = stm32f1xx_hal::adc::Adc::adc1(device.ADC1, &mut rcc.apb2, clocks);
+
+		loop {
+			let fnord: u16 = adc.read(&mut resources.x3423.mfpos0).unwrap();
+			dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value( ((fnord as u32) *3895 / 4096 + 200) as u16));
+			delay.delay_us(5_u16);
+			resources.x3423.capture_analog_value(1, &mut delay);
+/*
+			let fnord: u16 = adc.read(&mut resources.x3423.mfpos1).unwrap();
+			dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value( ((fnord as u32) *3300 / 4096 + 256) as u16));
+			delay.delay_us(5_u16);
+			resources.x3423.capture_analog_value(5, &mut delay);
+
+			let fnord: u16 = adc.read(&mut resources.x3423.mfpos2).unwrap();
+			dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value( ((fnord as u32) *3300 / 4096 + 256) as u16));
+			delay.delay_us(5_u16);
+			resources.x3423.capture_analog_value(9, &mut delay);
+
+			let fnord: u16 = adc.read(&mut resources.x3423.mfpos3).unwrap();
+			dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value( ((fnord as u32) *3300 / 4096 + 256) as u16));
+			delay.delay_us(5_u16);
+			resources.x3423.capture_analog_value(13, &mut delay);
+
+			let fnord: u16 = adc.read(&mut resources.x3423.mfpos4).unwrap();
+			dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value( ((fnord as u32) *3300 / 4096 + 256) as u16));
+			delay.delay_us(5_u16);
+			resources.x3423.capture_analog_value(15, &mut delay);*/
 		}
 	
 		
