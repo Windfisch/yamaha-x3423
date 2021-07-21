@@ -93,7 +93,7 @@ impl X3423 {
 	}
 
 	fn set_other(&mut self, dasel: u8, dainh: u8, adsel: u8) {
-		self.data.apply_data(dasel | (dainh << 3) | (adsel << 6), &mut self.fd3);
+		self.data.apply_data((dasel & 7) | ((dainh & 7) << 3) | ((adsel & 2) << 6), &mut self.fd3);
 	}
 
 	pub fn capture_analog_value(&mut self, index: u8, delay: &mut embedded_hal::blocking::delay::DelayUs<u32>) {
