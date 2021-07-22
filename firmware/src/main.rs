@@ -1,8 +1,6 @@
-#![deny(unsafe_code)]
 #![no_main]
 #![no_std]
 
-extern crate panic_halt;
 use embedded_hal::digital::v2::OutputPin;
 use embedded_hal::digital::v1_compat::OldOutputPin;
 use rtic::app;
@@ -27,6 +25,35 @@ use core::convert::Infallible;
 use micromath::F32Ext;
 
 const PERIOD: u32 = 100_000_000;
+
+
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo) -> ! {
+	use core::mem::MaybeUninit;
+	cortex_m::interrupt::disable();
+
+	let led: stm32f1xx_hal::gpio::gpioc::PC13<Input<Floating>> = unsafe { MaybeUninit::uninit().assume_init() };
+	let mut reg = unsafe { MaybeUninit::uninit().assume_init() };
+	let mut led = led.into_push_pull_output(&mut reg);
+	loop {
+		let mut blink_thrice = |delay: u32| {
+			for _ in 0..3 {
+				led.set_low().ok();
+				cortex_m::asm::delay(5000000*delay);
+				led.set_high().ok();
+				cortex_m::asm::delay(10000000);
+			}
+			cortex_m::asm::delay(10000000);
+		};
+		blink_thrice(1);
+		blink_thrice(4);
+		blink_thrice(1);
+		cortex_m::asm::delay(10000000);
+	}
+}
+
+
+
 
 struct X3423DataPins {
 	d0: PB4<Output<OpenDrain>>,
@@ -104,7 +131,7 @@ impl X3423 {
 	}
 
 	fn set_other(&mut self, dasel: u8, dainh: u8, adsel: u8) {
-		self.data.apply_data((dasel & 7) | ((dainh & 7) << 3) | ((adsel & 2) << 6), &mut self.fd3);
+		self.data.apply_data((dasel & 7) | ((dainh & 7) << 3) | ((adsel & 3) << 6), &mut self.fd3);
 	}
 
 	pub fn capture_analog_value(&mut self, index: u8, delay: &mut embedded_hal::blocking::delay::DelayUs<u32>) {
@@ -116,6 +143,91 @@ impl X3423 {
 		delay.delay_us(1000);
 		self.set_other(dasel, 7, adsel);
 	}
+
+	pub fn select_analog_value(&mut self, index: u8, delay: &mut embedded_hal::blocking::delay::DelayUs<u32>) {
+		assert!(index < 4);
+		self.set_other(0, 7, index);
+		delay.delay_us(1000);
+	}
+}
+
+enum FaderCalibrationPhase {
+	Init,
+	ApproachMin,
+	ApproachMidFromBelow,
+	ApproachMax,
+	ApproachMidFromAbove,
+	Approach75FromBelow,
+	Approach25FromAbove
+}
+
+pub struct Fader {
+	write_low: u16,
+	write_high: u16,
+	write_deadzone: u16,
+	read_low: u16,
+	read_high: u16,
+
+	target_value: Option<f32>,
+	time_left: u32,
+	last_value: f32,
+}
+
+impl Default for Fader {
+	fn default() -> Fader { Fader::new() }
+}
+
+impl Fader {
+	pub fn new() -> Fader {
+		Fader {
+			write_low: 200,
+			write_high: 2900,
+			write_deadzone: 0,
+			read_low: 0,
+			read_high: 4095,
+			target_value: None,
+			time_left: 0,
+			last_value: 0.5,
+		}
+	}
+	pub fn update_value(&mut self, raw: u16) {
+		self.last_value = (raw - self.read_low) as f32 / ((self.read_high - self.read_low) as f32);
+	}
+
+	pub fn value(&self) -> f32 {
+		if let Some(target) = self.target_value {
+			target
+		}
+		else {
+			self.last_value
+		}
+	}
+	pub fn set_target(&mut self, target: f32, time: u32) {
+		const TIMEOUT: u32 = 1234567;
+		self.target_value = Some(target);
+		self.time_left = TIMEOUT;
+	}
+	pub fn process_target(&mut self) -> Option<u16> {
+		if let Some(target) = self.target_value {
+			if self.time_left == 0 {
+				self.target_value = None;
+				return None;
+			}
+			else {
+				self.time_left -= 1;
+				let target_raw = (target as f32 * (self.write_high - self.write_low) as f32 + self.write_low as f32) as u16;
+				if target > self.last_value {
+					return Some(target_raw - self.write_deadzone.min(target_raw));
+				}
+				else {
+					return Some(target_raw + self.write_deadzone.min(4095-target_raw));
+				}
+			}
+		}
+		else {
+			return None;
+		}
+	}
 }
 
 #[app(device = stm32f1xx_hal::pac, peripherals = true)]
@@ -123,11 +235,15 @@ const APP: () = {
 	struct Resources {
 		led: PC13<Output<PushPull>>,
 		x3423: X3423,
+		faders: [Fader; 17],
 		usb_dev: UsbDevice<'static, UsbBusType>,
 		midi: usbd_midi::midi_device::MidiClass<'static, UsbBus<Peripheral>>,
 		adc: Adc<ADC1>,
 		dac: Mcp49xx<SpiInterface<spi::Spi<stm32f1xx_hal::pac::SPI2, spi::Spi2NoRemap, (PB13<Alternate<PushPull>>, spi::NoMiso, PB15<Alternate<PushPull>>), u8>, OldOutputPin<PC15<Output<PushPull>>>>, Resolution12Bit, DualChannel, Unbuffered>,
-		delay: stm32f1xx_hal::delay::Delay
+		delay: stm32f1xx_hal::delay::Delay,
+
+		values: [f32; 17],
+		target_values: [Option<f32>; 17],
 	}
 
 	#[init(spawn=[xmain])]
@@ -231,7 +347,10 @@ const APP: () = {
 			midi,
 			adc,
 			dac,
-			delay
+			delay,
+			faders: Default::default(),
+			values: [0.5; 17],
+			target_values: [None; 17],
 		};
 
 		cortex_m::asm::delay(5);
@@ -242,7 +361,7 @@ const APP: () = {
 	}
 
 	
-	#[task(resources = [x3423, adc, dac, delay], capacity=10, priority=1)]
+	#[task(resources = [x3423, adc, dac, delay, faders, values, target_values], spawn = [periodic_usb_poll], capacity=10, priority=1)]
 	fn xmain(mut c : xmain::Context) {
 		c.resources.x3423.reset.set_high();
 
@@ -256,53 +375,81 @@ const APP: () = {
 				c.resources.x3423.capture_analog_value(i, c.resources.delay);
 			}
 		}
+		c.resources.x3423.set_motor_enable(0);
 
-		c.resources.x3423.set_motor_enable( 0xa222 );
 		loop {
-			let fnord: u16 = c.resources.adc.read(&mut c.resources.x3423.mfpos0).unwrap();
-			c.resources.dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value( ((fnord as u32) *3895 / 4096 + 200) as u16));
-			c.resources.delay.delay_us(5_u16);
-			c.resources.x3423.capture_analog_value(1, c.resources.delay);
-
-			let fnord: u16 = c.resources.adc.read(&mut c.resources.x3423.mfpos1).unwrap();
-			c.resources.dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value( ((fnord as u32) *3895 / 4096 + 200) as u16));
-			c.resources.delay.delay_us(5_u16);
-			c.resources.x3423.capture_analog_value(5, c.resources.delay);
-
-			let fnord: u16 = c.resources.adc.read(&mut c.resources.x3423.mfpos2).unwrap();
-			c.resources.dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value( ((fnord as u32) *3895 / 4096 + 200) as u16));
-			c.resources.delay.delay_us(5_u16);
-			c.resources.x3423.capture_analog_value(9, c.resources.delay);
-
-			let fnord: u16 = c.resources.adc.read(&mut c.resources.x3423.mfpos3).unwrap();
-			c.resources.dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value( ((fnord as u32) *3895 / 4096 + 200) as u16));
-			c.resources.delay.delay_us(5_u16);
-			c.resources.x3423.capture_analog_value(13, c.resources.delay);
-
-			let fnord: u16 = c.resources.adc.read(&mut c.resources.x3423.mfpos4).unwrap();
-			c.resources.dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value( ((fnord as u32) *3895 / 4096 + 200) as u16));
-			c.resources.delay.delay_us(5_u16);
-			c.resources.x3423.capture_analog_value(15, c.resources.delay);
-		}
+			for i in 0..4 {
+				c.resources.x3423.select_analog_value(i as u8, c.resources.delay);
+				c.resources.faders[0 + i].update_value( c.resources.adc.read(&mut c.resources.x3423.mfpos0).unwrap() );
+				c.resources.faders[4 + i].update_value( c.resources.adc.read(&mut c.resources.x3423.mfpos1).unwrap() );
+				c.resources.faders[8 + i].update_value( c.resources.adc.read(&mut c.resources.x3423.mfpos2).unwrap() );
+				c.resources.faders[12 + i].update_value( c.resources.adc.read(&mut c.resources.x3423.mfpos3).unwrap() );
+			}
+			c.resources.faders[16].update_value( c.resources.adc.read(&mut c.resources.x3423.mfpos4).unwrap() );
 	
+
+			let mut fader_values = [0.0; 17];
+			for i in 0..17 {
+				fader_values[i] = c.resources.faders[i].value()
+			}
+			c.resources.values.lock(|values| {
+				*values = fader_values;
+			});
 		
+			c.spawn.periodic_usb_poll();
+		}
+
 		//c.resources.delay.delay_ms(1000_u16);
 		c.resources.x3423.set_motor_enable(0);
 	}
 
-	#[task(binds = USB_LP_CAN_RX0, spawn=[xmain], resources=[midi, usb_dev, led], priority=2)]
+	#[task(binds = USB_LP_CAN_RX0, spawn=[periodic_usb_poll], priority=2)]
+	fn usb_interrupt_handler(mut c : usb_interrupt_handler::Context) {
+		c.spawn.periodic_usb_poll();
+	}
+
+	#[task(resources=[midi, usb_dev, led, values, target_values], priority=2)]
 	fn periodic_usb_poll(mut c : periodic_usb_poll::Context) {
+		static mut last_value: [u16; 17] = [0x42*128; 17];
+
 		c.resources.usb_dev.poll(&mut[c.resources.midi]);
 
 		let mut message: [u8; 4] = [0; 4];
 		while let Ok(len) = c.resources.midi.read(&mut message) {
 			if len == 4 {
 				c.resources.led.toggle();
+				
+				let cable = (message[0] & 0xF0) >> 4;
+				let messagetype = message[0] & 0x0F;
+
+				match messagetype {
+					0xB => {
+						let channel = message[1] & 0x0F;
+						let cc = message[2];
+						let value = message[3];
+						if (1..=17).contains(&cc) {
+
+						}
+					}
+					_ => {}
+				}
+
+			}
+		}
+
+		for i in 0..17 {
+			assert!(c.resources.values[i] >= 0.0 && c.resources.values[i] <= 1.0);
+			let val = (c.resources.values[i] * 16383.0) as u16;
+			if last_value[i] / 128 != val / 128 {
+				if c.resources.midi.send_bytes([0x0B, 0xB0, i as u8 + 1, (val / 128) as u8]).is_ok() {
+					last_value[i] = val;
+				}
 			}
 		}
 	}
 	
 	extern "C" {
 		fn EXTI0();
+		fn EXTI1();
 	}
 };

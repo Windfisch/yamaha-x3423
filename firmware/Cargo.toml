@@ -27,7 +27,7 @@ mcp49xx = ">=0.1.0"
 panic-halt = "0.2.0"
 
 [profile.dev]
-opt-level = 1
+opt-level = 0
 codegen-units = 16
 debug = true
 lto = false
@@ -36,4 +36,4 @@ lto = false
 opt-level = "s"     # optimize for size
 codegen-units = 1   # better optimizations
 debug = true        # symbols are nice and they don't increase the size on Flash
-lto = true          # better optimizations
+#lto = true          # better optimizations
