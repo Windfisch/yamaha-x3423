@@ -173,6 +173,10 @@ pub struct Fader {
 	time_left: u32,
 	last_value: f32,
 	last_value_raw: u16,
+	
+	mid_from_above: u16,
+	mid_from_below: u16,
+	v25_from_above: u16,
 
 	calibration_phase: FaderCalibrationPhase
 }
@@ -180,6 +184,12 @@ pub struct Fader {
 impl Default for Fader {
 	fn default() -> Fader { Fader::new() }
 }
+
+const WRITE_LOW_APPROX: u16 = 200;
+const WRITE_HIGH_APPROX: u16 = 2900;
+const WRITE_25_APPROX: u16 = (WRITE_LOW_APPROX * 3 + WRITE_HIGH_APPROX) / 4;
+const WRITE_75_APPROX: u16 = (WRITE_LOW_APPROX + WRITE_HIGH_APPROX * 3) / 4;
+const WRITE_MID_APPROX: u16 = (WRITE_LOW_APPROX + WRITE_HIGH_APPROX) / 2;
 
 impl Fader {
 	pub fn new() -> Fader {
@@ -193,16 +203,21 @@ impl Fader {
 			time_left: 0,
 			last_value: 0.5,
 			last_value_raw: 0,
+			mid_from_above: 0,
+			mid_from_below: 0,
+			v25_from_above: 0,
 			calibration_phase: FaderCalibrationPhase::Init
 		}
 	}
 	pub fn update_value(&mut self, raw: u16) {
-		self.last_value =
-			if raw < self.read_low { 0. }
-			else if raw > self.read_high { 1. }
-			else {(raw - self.read_low) as f32 / ((self.read_high - self.read_low) as f32)}
-		;
+		self.last_value = self.cook_raw_read_value(raw);
 		self.last_value_raw = raw;
+	}
+
+	fn cook_raw_read_value(&self, raw: u16) -> f32 {
+		if raw < self.read_low { 0. }
+		else if raw > self.read_high { 1. }
+		else {(raw - self.read_low) as f32 / ((self.read_high - self.read_low) as f32)}
 	}
 
 	pub fn value(&self) -> f32 {
@@ -233,24 +248,69 @@ impl Fader {
 		}
 		match self.calibration_phase {
 			Init => {
-				self.time_left = 300;
 				self.calibration_phase = ApproachMin;
+				self.time_left = 200;
 				Some(0)
 			}
 			ApproachMin => {
 				if self.time_left == 0 {
 					self.read_low = self.last_value_raw;
-					self.calibration_phase = ApproachMax;
-					self.time_left = 300;
+					self.calibration_phase = ApproachMidFromBelow;
+					self.time_left = 150;
 				}
 				Some(0)
+			}
+			ApproachMidFromBelow => {
+				if self.time_left == 0 {
+					self.mid_from_below = self.last_value_raw;
+					self.calibration_phase = ApproachMax;
+					self.time_left = 150;
+				}
+				Some(4095)
 			}
 			ApproachMax => {
 				if self.time_left == 0 {
 					self.read_high = self.last_value_raw;
-					self.calibration_phase = NotCalibrating;
+					self.calibration_phase = ApproachMidFromAbove;
+					self.time_left = 150;
 				}
 				Some(4095)
+			}
+			ApproachMidFromAbove => {
+				if self.time_left == 0 {
+					self.mid_from_above = self.last_value_raw;
+					self.calibration_phase = Approach25FromAbove;
+					self.time_left = 150;
+				}
+				Some(WRITE_MID_APPROX)
+			}
+			Approach25FromAbove => {
+				if self.time_left == 0 {
+					self.v25_from_above = self.last_value_raw;
+					self.calibration_phase = Approach75FromBelow;
+					self.time_left = 150;
+				}
+				Some(WRITE_25_APPROX)
+			}
+			Approach75FromBelow => {
+				if self.time_left == 0 {
+					let v75_from_below = self.last_value_raw;
+
+					let read_deadzone = if self.mid_from_above > self.mid_from_below { (self.mid_from_above - self.mid_from_below) / 2 } else { 0 };
+					let v75_cooked = self.cook_raw_read_value(v75_from_below + read_deadzone);
+					let v25_cooked = self.cook_raw_read_value(self.v25_from_above - read_deadzone);
+
+					let gain = (WRITE_75_APPROX - WRITE_25_APPROX) as f32 / (v75_cooked - v25_cooked);
+					assert!(0. < gain);
+					self.write_low = WRITE_25_APPROX - ((v25_cooked * gain) as u16);
+					self.write_high = self.write_low + (gain as u16);
+					self.write_deadzone = 0; // FIXME
+
+
+					self.calibration_phase = NotCalibrating;
+					self.time_left = 150;
+				}
+				Some(WRITE_75_APPROX)
 			}
 			_ => { None }
 		}
@@ -481,12 +541,12 @@ const APP: () = {
 	fn periodic_usb_poll(mut c : periodic_usb_poll::Context) {
 		static mut last_value: [u16; 17] = [0x42*128; 17];
 
+		c.resources.led.toggle();
 		c.resources.usb_dev.poll(&mut[c.resources.midi]);
 
 		let mut message: [u8; 4] = [0; 4];
 		while let Ok(len) = c.resources.midi.read(&mut message) {
 			if len == 4 {
-				c.resources.led.toggle();
 				
 				let cable = (message[0] & 0xF0) >> 4;
 				let messagetype = message[0] & 0x0F;
@@ -502,10 +562,8 @@ const APP: () = {
 					}
 					_ => {}
 				}
-
 			}
 		}
-
 		for i in 0..17 {
 			assert!(c.resources.values[i] >= 0.0 && c.resources.values[i] <= 1.0);
 			let val = (c.resources.values[i] * 16383.0) as u16;
