@@ -378,6 +378,7 @@ const APP: () = {
 
 		values: [f32; 17],
 		target_values: [Option<f32>; 17],
+		fader_processes_user_input: [bool; 17],
 	}
 
 	#[init]
@@ -492,6 +493,7 @@ const APP: () = {
 			target_values: [None; 17],
 			mytimer,
 			fader_steps: [0; 17],
+			fader_processes_user_input: [false; 17],
 		};
 
 		cortex_m::asm::delay(5);
@@ -501,7 +503,7 @@ const APP: () = {
 	}
 
 	
-	#[task(binds = TIM2, resources = [x3423, adc, dac, delay, faders, values, target_values, mytimer, led, midi, fader_steps], priority=1)]
+	#[task(binds = TIM2, resources = [x3423, adc, dac, delay, faders, values, target_values, mytimer, led, midi, fader_steps, fader_processes_user_input], priority=1)]
 	fn xmain(mut c : xmain::Context) {
 		static mut blink: u64 = 0;
 		static mut last_value: [u16; 17] = [0x42*128; 17];
@@ -524,8 +526,8 @@ const APP: () = {
 		let mut fader_steps = c.resources.fader_steps.lock(|s| *s);
 		for i in 0..17 { fader_steps[i] = i as u8; }
 		fader_steps[3] = 3;
-		for (fader, steps) in c.resources.faders.iter_mut().zip(fader_steps.iter()) {
-			if *steps > 1 {
+		for ((fader, steps), user_flag) in c.resources.faders.iter_mut().zip(fader_steps.iter()).zip(c.resources.fader_processes_user_input.iter()) {
+			if *steps > 1 && !*user_flag {
 				let steps_f32 = *steps as f32;
 				let quantized_value = (fader.live_value() * (steps_f32 - 1.)).round() / (steps_f32 - 1.);
 				let diff = fader.live_value() - quantized_value;
@@ -566,6 +568,12 @@ const APP: () = {
 			}
 		}
 
+		for (fader, user_flag) in c.resources.faders.iter().zip(c.resources.fader_processes_user_input.iter_mut()) {
+			if fader.target().is_none() {
+				*user_flag = false;
+			}
+		}
+
 
 
 		c.resources.midi.lock(|midi| {
@@ -591,6 +599,7 @@ const APP: () = {
 		for i in 0..17 {
 			if let Some(val) = target_values[i] {
 				c.resources.faders[i].set_target(val);
+				c.resources.fader_processes_user_input[i] = true;
 			}
 		}
 	}
