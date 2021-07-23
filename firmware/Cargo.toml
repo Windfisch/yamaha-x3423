@@ -23,9 +23,6 @@ micromath = "2.0.0"
 #noop-bus-mutex = { git="https://github.com/Windfisch/noop-bus-mutex" }
 mcp49xx = ">=0.1.0"
 
-# Panic behaviour, see https://crates.io/keywords/panic-impl for alternatives
-panic-halt = "0.2.0"
-
 [profile.dev]
 opt-level = 0
 codegen-units = 16

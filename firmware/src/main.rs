@@ -4,7 +4,6 @@
 use embedded_hal::digital::v2::OutputPin;
 use embedded_hal::digital::v1_compat::OldOutputPin;
 use rtic::app;
-use rtic::cyccnt::U32Ext;
 use stm32f1xx_hal::gpio::{gpioa::*, gpiob::*, gpioc::*, Input, Floating, Analog, Alternate, Output, PushPull, OpenDrain, State};
 use stm32f1xx_hal::spi;
 use stm32f1xx_hal::prelude::*;
@@ -18,7 +17,6 @@ use mcp49xx::marker::Resolution12Bit;
 use mcp49xx::marker::DualChannel;
 use mcp49xx::marker::Unbuffered;
 
-use usb_device::bus;
 use usb_device::prelude::*;
 use core::convert::Infallible;
 
@@ -134,7 +132,7 @@ impl X3423 {
 		self.data.apply_data((dasel & 7) | ((dainh & 7) << 3) | ((adsel & 3) << 6), &mut self.fd3);
 	}
 
-	pub fn capture_analog_value(&mut self, index: u8, delay: &mut embedded_hal::blocking::delay::DelayUs<u32>) {
+	pub fn capture_analog_value(&mut self, index: u8, delay: &mut impl embedded_hal::blocking::delay::DelayUs<u32>) {
 		assert!(index < 17);
 		let dasel = index & 7;
 		let dainh = !(1 << (index >> 3));
@@ -144,7 +142,7 @@ impl X3423 {
 		self.set_other(dasel, 7, adsel);
 	}
 
-	pub fn select_analog_value(&mut self, index: u8, delay: &mut embedded_hal::blocking::delay::DelayUs<u32>) {
+	pub fn select_analog_value(&mut self, index: u8, delay: &mut impl embedded_hal::blocking::delay::DelayUs<u32>) {
 		assert!(index < 4);
 		self.set_other(0, 7, index);
 		delay.delay_us(1000);
@@ -152,6 +150,7 @@ impl X3423 {
 }
 
 enum FaderCalibrationPhase {
+	NotCalibrating,
 	Init,
 	ApproachMin,
 	ApproachMidFromBelow,
@@ -171,6 +170,9 @@ pub struct Fader {
 	target_value: Option<f32>,
 	time_left: u32,
 	last_value: f32,
+	last_value_raw: u16,
+
+	calibration_phase: FaderCalibrationPhase
 }
 
 impl Default for Fader {
@@ -188,10 +190,17 @@ impl Fader {
 			target_value: None,
 			time_left: 0,
 			last_value: 0.5,
+			last_value_raw: 0,
+			calibration_phase: FaderCalibrationPhase::Init
 		}
 	}
 	pub fn update_value(&mut self, raw: u16) {
-		self.last_value = (raw - self.read_low) as f32 / ((self.read_high - self.read_low) as f32);
+		self.last_value =
+			if raw < self.read_low { 0. }
+			else if raw > self.read_high { 1. }
+			else {(raw - self.read_low) as f32 / ((self.read_high - self.read_low) as f32)}
+		;
+		self.last_value_raw = raw;
 	}
 
 	pub fn value(&self) -> f32 {
@@ -207,7 +216,46 @@ impl Fader {
 		self.target_value = Some(target);
 		self.time_left = TIMEOUT;
 	}
-	pub fn process_target(&mut self) -> Option<u16> {
+	pub fn process(&mut self) -> Option<u16> {
+		use FaderCalibrationPhase::*;
+		match self.calibration_phase {
+			NotCalibrating => self.process_normal(),
+			_ => self.process_calibration()
+		}
+	}
+
+	fn process_calibration(&mut self) -> Option<u16> {
+		use FaderCalibrationPhase::*;
+		if self.time_left > 0 {
+			self.time_left -= 1;
+		}
+		match self.calibration_phase {
+			Init => {
+				self.time_left = 300;
+				self.calibration_phase = ApproachMin;
+				Some(0)
+			}
+			ApproachMin => {
+				if self.time_left == 0 {
+					self.read_low = self.last_value_raw;
+					self.calibration_phase = ApproachMax;
+					self.time_left = 300;
+				}
+				Some(0)
+			}
+			ApproachMax => {
+				if self.time_left == 0 {
+					self.read_high = self.last_value_raw;
+					self.calibration_phase = NotCalibrating;
+				}
+				Some(4095)
+			}
+			_ => { None }
+		}
+		
+	}
+
+	fn process_normal(&mut self) -> Option<u16> {
 		if let Some(target) = self.target_value {
 			if self.time_left == 0 {
 				self.target_value = None;
@@ -365,7 +413,7 @@ const APP: () = {
 	fn xmain(mut c : xmain::Context) {
 		c.resources.x3423.reset.set_high();
 
-		c.resources.x3423.set_motor_enable(0x1FFFF);
+/*		c.resources.x3423.set_motor_enable(0x1FFFF);
 		for frame in 0..400 {
 			for i in 0..17 {
 				c.resources.dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value(
@@ -376,6 +424,7 @@ const APP: () = {
 			}
 		}
 		c.resources.x3423.set_motor_enable(0);
+*/
 
 		loop {
 			for i in 0..4 {
@@ -386,21 +435,37 @@ const APP: () = {
 				c.resources.faders[12 + i].update_value( c.resources.adc.read(&mut c.resources.x3423.mfpos3).unwrap() );
 			}
 			c.resources.faders[16].update_value( c.resources.adc.read(&mut c.resources.x3423.mfpos4).unwrap() );
-	
+
+
+
 
 			let mut fader_values = [0.0; 17];
+			let mut active_faders = 0;
+			let mut n_active_faders = 0;
 			for i in 0..17 {
-				fader_values[i] = c.resources.faders[i].value()
+				fader_values[i] = c.resources.faders[i].value();
+
+				if let Some(target_value) = c.resources.faders[i].process() {
+					active_faders |= 1<<i;
+					n_active_faders += 1;
+
+					c.resources.dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value(target_value));
+					c.resources.delay.delay_us(5_u16);
+					c.resources.x3423.capture_analog_value(i as u8, c.resources.delay);
+
+					if n_active_faders >= 4 {
+						break;
+					}
+				}
 			}
+			c.resources.x3423.set_motor_enable(active_faders);
+
 			c.resources.values.lock(|values| {
 				*values = fader_values;
 			});
 		
 			c.spawn.periodic_usb_poll();
 		}
-
-		//c.resources.delay.delay_ms(1000_u16);
-		c.resources.x3423.set_motor_enable(0);
 	}
 
 	#[task(binds = USB_LP_CAN_RX0, spawn=[periodic_usb_poll], priority=2)]
