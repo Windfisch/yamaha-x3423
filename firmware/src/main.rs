@@ -211,7 +211,7 @@ impl Fader {
 			self.last_value
 		}
 	}
-	pub fn set_target(&mut self, target: f32, time: u32) {
+	pub fn set_target(&mut self, target: f32) {
 		const TIMEOUT: u32 = 1234567;
 		self.target_value = Some(target);
 		self.time_left = TIMEOUT;
@@ -463,6 +463,17 @@ const APP: () = {
 			c.resources.values.lock(|values| {
 				*values = fader_values;
 			});
+			let target_values = c.resources.target_values.lock(|target_values| {
+				let tmp = *target_values;
+				*target_values = [None; 17];
+				tmp
+			});
+
+			for i in 0..17 {
+				if let Some(val) = target_values[i] {
+					c.resources.faders[i].set_target(val);
+				}
+			}
 		
 			c.spawn.periodic_usb_poll();
 		}
@@ -493,7 +504,7 @@ const APP: () = {
 						let cc = message[2];
 						let value = message[3];
 						if (1..=17).contains(&cc) {
-
+							c.resources.target_values[(cc-1) as usize] = Some(value as f32 / 128.0);
 						}
 					}
 					_ => {}
