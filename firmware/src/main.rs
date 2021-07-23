@@ -6,16 +6,18 @@ use embedded_hal::digital::v1_compat::OldOutputPin;
 use rtic::app;
 use stm32f1xx_hal::gpio::{gpioa::*, gpiob::*, gpioc::*, Input, Floating, Analog, Alternate, Output, PushPull, OpenDrain, State};
 use stm32f1xx_hal::spi;
+use stm32f1xx_hal::timer;
 use stm32f1xx_hal::prelude::*;
 use stm32f1xx_hal::delay::Delay;
 use stm32f1xx_hal::usb::{UsbBus, Peripheral, UsbBusType};
 use stm32f1xx_hal::adc::Adc;
-use stm32f1xx_hal::pac::ADC1;
+use stm32f1xx_hal::pac::{ADC1, TIM2};
 use mcp49xx::Mcp49xx;
 use mcp49xx::interface::SpiInterface;
 use mcp49xx::marker::Resolution12Bit;
 use mcp49xx::marker::DualChannel;
 use mcp49xx::marker::Unbuffered;
+use stm32f1xx_hal::time::Hertz;
 
 use usb_device::prelude::*;
 use core::convert::Infallible;
@@ -138,14 +140,14 @@ impl X3423 {
 		let dainh = !(1 << (index >> 3));
 		let adsel = 0;
 		self.set_other(dasel, dainh, adsel);
-		delay.delay_us(1000);
+		delay.delay_us(10);
 		self.set_other(dasel, 7, adsel);
 	}
 
 	pub fn select_analog_value(&mut self, index: u8, delay: &mut impl embedded_hal::blocking::delay::DelayUs<u32>) {
 		assert!(index < 4);
 		self.set_other(0, 7, index);
-		delay.delay_us(1000);
+		delay.delay_us(10);
 	}
 }
 
@@ -281,6 +283,7 @@ impl Fader {
 #[app(device = stm32f1xx_hal::pac, peripherals = true)]
 const APP: () = {
 	struct Resources {
+		mytimer: timer::CountDownTimer<TIM2>,
 		led: PC13<Output<PushPull>>,
 		x3423: X3423,
 		faders: [Fader; 17],
@@ -294,7 +297,7 @@ const APP: () = {
 		target_values: [Option<f32>; 17],
 	}
 
-	#[init(spawn=[xmain])]
+	#[init]
 	fn init(cx: init::Context) -> init::LateResources {
 		static mut USB_BUS: Option<usb_device::bus::UsbBusAllocator<UsbBusType>> = None;
 
@@ -367,6 +370,11 @@ const APP: () = {
 
 		let mut adc = stm32f1xx_hal::adc::Adc::adc1(device.ADC1, &mut rcc.apb2, clocks);
 
+		let mut mytimer =
+			timer::Timer::tim2(device.TIM2, &clocks, &mut rcc.apb1)
+			.start_count_down(Hertz(1000));
+		mytimer.listen(timer::Event::Update);
+
 		let mut resources = init::LateResources {
 			led,
 			x3423: X3423 {
@@ -399,84 +407,69 @@ const APP: () = {
 			faders: Default::default(),
 			values: [0.5; 17],
 			target_values: [None; 17],
+			mytimer
 		};
 
 		cortex_m::asm::delay(5);
-
-		cx.spawn.xmain();
+		resources.x3423.reset.set_high();
 
 		resources
 	}
 
 	
-	#[task(resources = [x3423, adc, dac, delay, faders, values, target_values], spawn = [periodic_usb_poll], capacity=10, priority=1)]
+	#[task(binds = TIM2, resources = [x3423, adc, dac, delay, faders, values, target_values, mytimer], spawn = [periodic_usb_poll], priority=1)]
 	fn xmain(mut c : xmain::Context) {
-		c.resources.x3423.reset.set_high();
+		c.resources.mytimer.clear_update_interrupt_flag();
 
-/*		c.resources.x3423.set_motor_enable(0x1FFFF);
-		for frame in 0..400 {
-			for i in 0..17 {
-				c.resources.dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value(
-					((f32::sin((frame as f32 /200. + i as f32 / 17.) * core::f32::consts::PI * 2.) / 2. + 0.5 ) * 2600. + 256.) as u16
-				));
+		for i in 0..4 {
+			c.resources.x3423.select_analog_value(i as u8, c.resources.delay);
+			c.resources.faders[0 + i].update_value( c.resources.adc.read(&mut c.resources.x3423.mfpos0).unwrap() );
+			c.resources.faders[4 + i].update_value( c.resources.adc.read(&mut c.resources.x3423.mfpos1).unwrap() );
+			c.resources.faders[8 + i].update_value( c.resources.adc.read(&mut c.resources.x3423.mfpos2).unwrap() );
+			c.resources.faders[12 + i].update_value( c.resources.adc.read(&mut c.resources.x3423.mfpos3).unwrap() );
+		}
+		c.resources.faders[16].update_value( c.resources.adc.read(&mut c.resources.x3423.mfpos4).unwrap() );
+
+
+
+
+		let mut fader_values = [0.0; 17];
+		let mut active_faders = 0;
+		let mut n_active_faders = 0;
+		for i in 0..17 {
+			fader_values[i] = c.resources.faders[i].value();
+
+			if let Some(target_value) = c.resources.faders[i].process() {
+				active_faders |= 1<<i;
+				n_active_faders += 1;
+
+				c.resources.dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value(target_value));
 				c.resources.delay.delay_us(5_u16);
-				c.resources.x3423.capture_analog_value(i, c.resources.delay);
-			}
-		}
-		c.resources.x3423.set_motor_enable(0);
-*/
+				c.resources.x3423.capture_analog_value(i as u8, c.resources.delay);
 
-		loop {
-			for i in 0..4 {
-				c.resources.x3423.select_analog_value(i as u8, c.resources.delay);
-				c.resources.faders[0 + i].update_value( c.resources.adc.read(&mut c.resources.x3423.mfpos0).unwrap() );
-				c.resources.faders[4 + i].update_value( c.resources.adc.read(&mut c.resources.x3423.mfpos1).unwrap() );
-				c.resources.faders[8 + i].update_value( c.resources.adc.read(&mut c.resources.x3423.mfpos2).unwrap() );
-				c.resources.faders[12 + i].update_value( c.resources.adc.read(&mut c.resources.x3423.mfpos3).unwrap() );
-			}
-			c.resources.faders[16].update_value( c.resources.adc.read(&mut c.resources.x3423.mfpos4).unwrap() );
-
-
-
-
-			let mut fader_values = [0.0; 17];
-			let mut active_faders = 0;
-			let mut n_active_faders = 0;
-			for i in 0..17 {
-				fader_values[i] = c.resources.faders[i].value();
-
-				if let Some(target_value) = c.resources.faders[i].process() {
-					active_faders |= 1<<i;
-					n_active_faders += 1;
-
-					c.resources.dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value(target_value));
-					c.resources.delay.delay_us(5_u16);
-					c.resources.x3423.capture_analog_value(i as u8, c.resources.delay);
-
-					if n_active_faders >= 4 {
-						break;
-					}
+				if n_active_faders >= 9 {
+					break;
 				}
 			}
-			c.resources.x3423.set_motor_enable(active_faders);
-
-			c.resources.values.lock(|values| {
-				*values = fader_values;
-			});
-			let target_values = c.resources.target_values.lock(|target_values| {
-				let tmp = *target_values;
-				*target_values = [None; 17];
-				tmp
-			});
-
-			for i in 0..17 {
-				if let Some(val) = target_values[i] {
-					c.resources.faders[i].set_target(val);
-				}
-			}
-		
-			c.spawn.periodic_usb_poll();
 		}
+		c.resources.x3423.set_motor_enable(active_faders);
+
+		c.resources.values.lock(|values| {
+			*values = fader_values;
+		});
+		let target_values = c.resources.target_values.lock(|target_values| {
+			let tmp = *target_values;
+			*target_values = [None; 17];
+			tmp
+		});
+
+		for i in 0..17 {
+			if let Some(val) = target_values[i] {
+				c.resources.faders[i].set_target(val);
+			}
+		}
+	
+		c.spawn.periodic_usb_poll();
 	}
 
 	#[task(binds = USB_LP_CAN_RX0, spawn=[periodic_usb_poll], priority=2)]
