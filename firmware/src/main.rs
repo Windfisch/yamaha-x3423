@@ -7,7 +7,7 @@ use x3423::X3423;
 use embedded_hal::digital::v2::OutputPin;
 use embedded_hal::digital::v1_compat::OldOutputPin;
 use rtic::app;
-use stm32f1xx_hal::gpio::{gpioa::*, gpiob::*, gpioc::*, Input, Floating, Analog, Alternate, Output, PushPull, OpenDrain, State};
+use stm32f1xx_hal::gpio::{gpiob::*, gpioc::*, Input, Floating, Analog, Alternate, Output, PushPull, OpenDrain, State};
 use stm32f1xx_hal::spi;
 use stm32f1xx_hal::timer;
 use stm32f1xx_hal::prelude::*;
@@ -31,7 +31,7 @@ const PERIOD: u32 = 100_000_000;
 
 
 #[panic_handler]
-fn panic(info: &core::panic::PanicInfo) -> ! {
+fn panic(_: &core::panic::PanicInfo) -> ! {
 	use core::mem::MaybeUninit;
 	cortex_m::interrupt::disable();
 

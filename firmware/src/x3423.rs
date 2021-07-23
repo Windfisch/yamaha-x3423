@@ -1,11 +1,9 @@
 use embedded_hal::digital::v2::OutputPin;
-use stm32f1xx_hal::gpio::{gpioa::*, gpiob::*, Analog, Alternate, Output, OpenDrain};
+use stm32f1xx_hal::gpio::{gpioa::*, gpiob::*, Analog, Output, OpenDrain};
 use stm32f1xx_hal::prelude::*;
 use stm32f1xx_hal::adc::Adc;
 use stm32f1xx_hal::pac::ADC1;
 use core::convert::Infallible;
-
-use micromath::F32Ext;
 
 pub struct X3423DataPins {
 	pub d0: PB4<Output<OpenDrain>>,
@@ -74,9 +72,9 @@ impl X3423DataPins {
 	fn apply_data(&mut self, data: u8, fd_pin: &mut impl embedded_hal::digital::v2::OutputPin) {
 		self.write_data(data).unwrap();
 		wait();
-		fd_pin.set_high();
+		fd_pin.set_high().ok();
 		wait();
-		fd_pin.set_low();
+		fd_pin.set_low().ok();
 	}
 }
 
@@ -86,9 +84,9 @@ impl X3423 {
 	}
 
 	pub fn reset(&mut self) {
-		self.res.reset.set_low();
+		self.res.reset.set_low().ok();
 		cortex_m::asm::delay(5);
-		self.res.reset.set_high();
+		self.res.reset.set_high().ok();
 	}
 
 	pub fn set_motor_enable(&mut self, state: u32) {
