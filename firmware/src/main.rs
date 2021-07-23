@@ -168,6 +168,7 @@ pub struct Fader {
 	write_deadzone: u16,
 	read_low: u16,
 	read_high: u16,
+	integrator: f32,
 
 	target_value: Option<f32>,
 	time_left: u32,
@@ -206,6 +207,7 @@ impl Fader {
 			mid_from_above: 0,
 			mid_from_below: 0,
 			v25_from_above: 0,
+			integrator: 0.,
 			calibration_phase: FaderCalibrationPhase::Init
 		}
 	}
@@ -229,9 +231,14 @@ impl Fader {
 		}
 	}
 	pub fn set_target(&mut self, target: f32) {
-		const TIMEOUT: u32 = 1234567;
-		self.target_value = Some(target);
-		self.time_left = TIMEOUT;
+		const TIMEOUT: u32 = 500;
+		match self.calibration_phase {
+			FaderCalibrationPhase::NotCalibrating => {
+				self.target_value = Some(target);
+				self.time_left = TIMEOUT;
+			}
+			_ => {}
+		}
 	}
 	pub fn process(&mut self) -> Option<u16> {
 		use FaderCalibrationPhase::*;
@@ -249,14 +256,14 @@ impl Fader {
 		match self.calibration_phase {
 			Init => {
 				self.calibration_phase = ApproachMin;
-				self.time_left = 200;
+				self.time_left = 300;
 				Some(0)
 			}
 			ApproachMin => {
 				if self.time_left == 0 {
 					self.read_low = self.last_value_raw;
 					self.calibration_phase = ApproachMidFromBelow;
-					self.time_left = 150;
+					self.time_left = 250;
 				}
 				Some(0)
 			}
@@ -264,15 +271,15 @@ impl Fader {
 				if self.time_left == 0 {
 					self.mid_from_below = self.last_value_raw;
 					self.calibration_phase = ApproachMax;
-					self.time_left = 150;
+					self.time_left = 250;
 				}
-				Some(4095)
+				Some(WRITE_MID_APPROX)
 			}
 			ApproachMax => {
 				if self.time_left == 0 {
 					self.read_high = self.last_value_raw;
 					self.calibration_phase = ApproachMidFromAbove;
-					self.time_left = 150;
+					self.time_left = 250;
 				}
 				Some(4095)
 			}
@@ -280,7 +287,7 @@ impl Fader {
 				if self.time_left == 0 {
 					self.mid_from_above = self.last_value_raw;
 					self.calibration_phase = Approach25FromAbove;
-					self.time_left = 150;
+					self.time_left = 250;
 				}
 				Some(WRITE_MID_APPROX)
 			}
@@ -288,7 +295,7 @@ impl Fader {
 				if self.time_left == 0 {
 					self.v25_from_above = self.last_value_raw;
 					self.calibration_phase = Approach75FromBelow;
-					self.time_left = 150;
+					self.time_left = 250;
 				}
 				Some(WRITE_25_APPROX)
 			}
@@ -296,7 +303,7 @@ impl Fader {
 				if self.time_left == 0 {
 					let v75_from_below = self.last_value_raw;
 
-					let read_deadzone = if self.mid_from_above > self.mid_from_below { (self.mid_from_above - self.mid_from_below) / 2 } else { 0 };
+					let read_deadzone = if self.mid_from_above >= self.mid_from_below { (self.mid_from_above - self.mid_from_below) / 2 } else { 0 };
 					let v75_cooked = self.cook_raw_read_value(v75_from_below + read_deadzone);
 					let v25_cooked = self.cook_raw_read_value(self.v25_from_above - read_deadzone);
 
@@ -304,11 +311,10 @@ impl Fader {
 					assert!(0. < gain);
 					self.write_low = WRITE_25_APPROX - ((v25_cooked * gain) as u16);
 					self.write_high = self.write_low + (gain as u16);
-					self.write_deadzone = 0; // FIXME
+					self.write_deadzone = ((self.cook_raw_read_value(self.mid_from_above) - self.cook_raw_read_value(self.mid_from_below)) * gain) as u16;
 
 
 					self.calibration_phase = NotCalibrating;
-					self.time_left = 150;
 				}
 				Some(WRITE_75_APPROX)
 			}
@@ -319,19 +325,29 @@ impl Fader {
 
 	fn process_normal(&mut self) -> Option<u16> {
 		if let Some(target) = self.target_value {
+			if self.last_value - target < 0.02 {
+				self.time_left = self.time_left.min(200);
+			}
 			if self.time_left == 0 {
 				self.target_value = None;
 				return None;
 			}
 			else {
 				self.time_left -= 1;
-				let target_raw = (target as f32 * (self.write_high - self.write_low) as f32 + self.write_low as f32) as u16;
-				if target > self.last_value {
-					return Some(target_raw - self.write_deadzone.min(target_raw));
+				let target_raw = (target * (self.write_high - self.write_low) as f32 + self.write_low as f32) as u16;
+
+				let error = target - self.last_value;
+				let limit = (1.0 - error.abs()/0.1).clamp(0.,1.);
+				self.integrator = (self.integrator + 0.2*error).clamp(-limit, limit);
+
+				if error > 0. {
+					self.integrator = self.integrator.max(0.0);
 				}
-				else {
-					return Some(target_raw + self.write_deadzone.min(4095-target_raw));
+				if error < 0. {
+					self.integrator = self.integrator.min(0.0);
 				}
+
+				return Some((target_raw as i32 + ((self.integrator * self.write_deadzone as f32) as i32)).clamp(0,4095) as u16);
 			}
 		}
 		else {
@@ -418,7 +434,7 @@ const APP: () = {
 			.build();
 
 		// USB interrupt
-		core.NVIC.enable(stm32f1xx_hal::pac::Interrupt::USB_LP_CAN_RX0);
+		//core.NVIC.enable(stm32f1xx_hal::pac::Interrupt::USB_LP_CAN_RX0);
 
 		// Configure SPI
 		let mosi = gpiob.pb15.into_alternate_push_pull(&mut gpiob.crh);
@@ -477,9 +493,15 @@ const APP: () = {
 	}
 
 	
-	#[task(binds = TIM2, resources = [x3423, adc, dac, delay, faders, values, target_values, mytimer], spawn = [periodic_usb_poll], priority=1)]
+	#[task(binds = TIM2, resources = [x3423, adc, dac, delay, faders, values, target_values, mytimer, led], spawn = [periodic_usb_poll], priority=1)]
 	fn xmain(mut c : xmain::Context) {
+		static mut blink: u64 = 0;
 		c.resources.mytimer.clear_update_interrupt_flag();
+		
+		*blink += 1;
+		if (*blink) % 100 == 0 {
+			c.resources.led.toggle();
+		}
 
 		for i in 0..4 {
 			c.resources.x3423.select_analog_value(i as u8, c.resources.delay);
@@ -490,29 +512,37 @@ const APP: () = {
 		}
 		c.resources.faders[16].update_value( c.resources.adc.read(&mut c.resources.x3423.mfpos4).unwrap() );
 
+		if *blink % 25 == 0 { c.resources.faders[0].set_target( (c.resources.faders[1].value() * 127.0) as u32 as f32 / 127.0 ); }
+
 
 
 
 		let mut fader_values = [0.0; 17];
 		let mut active_faders = 0;
 		let mut n_active_faders = 0;
+
+		let mut fnord : [Option<u16>; 17] = [None; 17];
 		for i in 0..17 {
 			fader_values[i] = c.resources.faders[i].value();
 
-			if let Some(target_value) = c.resources.faders[i].process() {
+			fnord[i] = c.resources.faders[i].process();
+			if let Some(target_value) = fnord[i] {
 				active_faders |= 1<<i;
 				n_active_faders += 1;
 
-				c.resources.dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value(target_value));
-				c.resources.delay.delay_us(5_u16);
-				c.resources.x3423.capture_analog_value(i as u8, c.resources.delay);
-
-				if n_active_faders >= 9 {
+				if n_active_faders >= 4 {
 					break;
 				}
 			}
 		}
 		c.resources.x3423.set_motor_enable(active_faders);
+		for i in 0..17 {
+			if let Some(target_value) = fnord[i] {
+				c.resources.dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value(target_value));
+				c.resources.delay.delay_us(5_u16);
+				c.resources.x3423.capture_analog_value(i as u8, c.resources.delay);
+			}
+		}
 
 		c.resources.values.lock(|values| {
 			*values = fader_values;
@@ -537,11 +567,10 @@ const APP: () = {
 		c.spawn.periodic_usb_poll();
 	}
 
-	#[task(resources=[midi, usb_dev, led, values, target_values], priority=2)]
+	#[task(resources=[midi, usb_dev, values, target_values], priority=3)]
 	fn periodic_usb_poll(mut c : periodic_usb_poll::Context) {
 		static mut last_value: [u16; 17] = [0x42*128; 17];
 
-		c.resources.led.toggle();
 		c.resources.usb_dev.poll(&mut[c.resources.midi]);
 
 		let mut message: [u8; 4] = [0; 4];
@@ -557,7 +586,7 @@ const APP: () = {
 						let cc = message[2];
 						let value = message[3];
 						if (1..=17).contains(&cc) {
-							c.resources.target_values[(cc-1) as usize] = Some(value as f32 / 128.0);
+							//c.resources.target_values[(cc-1) as usize] = Some(value as f32 / 128.0);
 						}
 					}
 					_ => {}
