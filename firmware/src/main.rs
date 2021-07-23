@@ -140,14 +140,14 @@ impl X3423 {
 		let dainh = !(1 << (index >> 3));
 		let adsel = 0;
 		self.set_other(dasel, dainh, adsel);
-		delay.delay_us(10);
+		delay.delay_us(20);
 		self.set_other(dasel, 7, adsel);
 	}
 
 	pub fn select_analog_value(&mut self, index: u8, delay: &mut impl embedded_hal::blocking::delay::DelayUs<u32>) {
 		assert!(index < 4);
 		self.set_other(0, 7, index);
-		delay.delay_us(10);
+		delay.delay_us(20);
 	}
 }
 
@@ -493,9 +493,10 @@ const APP: () = {
 	}
 
 	
-	#[task(binds = TIM2, resources = [x3423, adc, dac, delay, faders, values, target_values, mytimer, led], spawn = [periodic_usb_poll], priority=1)]
+	#[task(binds = TIM2, resources = [x3423, adc, dac, delay, faders, values, target_values, mytimer, led, midi], priority=1)]
 	fn xmain(mut c : xmain::Context) {
 		static mut blink: u64 = 0;
+		static mut last_value: [u16; 17] = [0x42*128; 17];
 		c.resources.mytimer.clear_update_interrupt_flag();
 		
 		*blink += 1;
@@ -544,39 +545,43 @@ const APP: () = {
 			}
 		}
 
-		c.resources.values.lock(|values| {
-			*values = fader_values;
+
+
+		c.resources.midi.lock(|midi| {
+			for i in 0..17 {
+				assert!(fader_values[i] >= 0.0 && fader_values[i] <= 1.0);
+				let val = (fader_values[i] * 16383.0) as u16;
+				if last_value[i] / 128 != val / 128 {
+					if midi.send_bytes([0x0B, 0xB0, i as u8 + 1, (val / 128) as u8]).is_ok() {
+						last_value[i] = val;
+					}
+				}
+			}
 		});
+
+
+
 		let target_values = c.resources.target_values.lock(|target_values| {
 			let tmp = *target_values;
 			*target_values = [None; 17];
 			tmp
 		});
-
+		
 		for i in 0..17 {
 			if let Some(val) = target_values[i] {
 				c.resources.faders[i].set_target(val);
 			}
 		}
-	
-		c.spawn.periodic_usb_poll();
 	}
 
-	#[task(binds = USB_LP_CAN_RX0, spawn=[periodic_usb_poll], priority=2)]
-	fn usb_interrupt_handler(mut c : usb_interrupt_handler::Context) {
-		c.spawn.periodic_usb_poll();
-	}
-
-	#[task(resources=[midi, usb_dev, values, target_values], priority=3)]
+	#[task(binds = USB_LP_CAN_RX0, resources=[midi, usb_dev, values, target_values], priority=2)]
 	fn periodic_usb_poll(mut c : periodic_usb_poll::Context) {
-		static mut last_value: [u16; 17] = [0x42*128; 17];
 
 		c.resources.usb_dev.poll(&mut[c.resources.midi]);
 
 		let mut message: [u8; 4] = [0; 4];
 		while let Ok(len) = c.resources.midi.read(&mut message) {
 			if len == 4 {
-				
 				let cable = (message[0] & 0xF0) >> 4;
 				let messagetype = message[0] & 0x0F;
 
@@ -586,22 +591,15 @@ const APP: () = {
 						let cc = message[2];
 						let value = message[3];
 						if (1..=17).contains(&cc) {
-							//c.resources.target_values[(cc-1) as usize] = Some(value as f32 / 128.0);
+							c.resources.target_values[(cc-1) as usize] = Some(value as f32 / 128.0);
 						}
 					}
 					_ => {}
 				}
 			}
 		}
-		for i in 0..17 {
-			assert!(c.resources.values[i] >= 0.0 && c.resources.values[i] <= 1.0);
-			let val = (c.resources.values[i] * 16383.0) as u16;
-			if last_value[i] / 128 != val / 128 {
-				if c.resources.midi.send_bytes([0x0B, 0xB0, i as u8 + 1, (val / 128) as u8]).is_ok() {
-					last_value[i] = val;
-				}
-			}
-		}
+
+		
 	}
 	
 	extern "C" {
