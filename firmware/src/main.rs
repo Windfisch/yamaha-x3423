@@ -230,15 +230,21 @@ impl Fader {
 			self.last_value
 		}
 	}
+	pub fn live_value(&self) -> f32 {
+		self.last_value
+	}
 	pub fn set_target(&mut self, target: f32) {
 		const TIMEOUT: u32 = 500;
 		match self.calibration_phase {
 			FaderCalibrationPhase::NotCalibrating => {
-				self.target_value = Some(target);
+				self.target_value = Some(target.clamp(0., 1.));
 				self.time_left = TIMEOUT;
 			}
 			_ => {}
 		}
+	}
+	pub fn target(&self) -> Option<f32> {
+		self.target_value
 	}
 	pub fn process(&mut self) -> Option<u16> {
 		use FaderCalibrationPhase::*;
@@ -363,6 +369,7 @@ const APP: () = {
 		led: PC13<Output<PushPull>>,
 		x3423: X3423,
 		faders: [Fader; 17],
+		fader_steps: [u8; 17],
 		usb_dev: UsbDevice<'static, UsbBusType>,
 		midi: usbd_midi::midi_device::MidiClass<'static, UsbBus<Peripheral>>,
 		adc: Adc<ADC1>,
@@ -483,7 +490,8 @@ const APP: () = {
 			faders: Default::default(),
 			values: [0.5; 17],
 			target_values: [None; 17],
-			mytimer
+			mytimer,
+			fader_steps: [0; 17],
 		};
 
 		cortex_m::asm::delay(5);
@@ -493,7 +501,7 @@ const APP: () = {
 	}
 
 	
-	#[task(binds = TIM2, resources = [x3423, adc, dac, delay, faders, values, target_values, mytimer, led, midi], priority=1)]
+	#[task(binds = TIM2, resources = [x3423, adc, dac, delay, faders, values, target_values, mytimer, led, midi, fader_steps], priority=1)]
 	fn xmain(mut c : xmain::Context) {
 		static mut blink: u64 = 0;
 		static mut last_value: [u16; 17] = [0x42*128; 17];
@@ -513,7 +521,20 @@ const APP: () = {
 		}
 		c.resources.faders[16].update_value( c.resources.adc.read(&mut c.resources.x3423.mfpos4).unwrap() );
 
-		if *blink % 25 == 0 { c.resources.faders[0].set_target( (c.resources.faders[1].value() * 127.0) as u32 as f32 / 127.0 ); }
+		let mut fader_steps = c.resources.fader_steps.lock(|s| *s);
+		for i in 0..17 { fader_steps[i] = i as u8; }
+		fader_steps[3] = 3;
+		for (fader, steps) in c.resources.faders.iter_mut().zip(fader_steps.iter()) {
+			if *steps > 1 {
+				let steps_f32 = *steps as f32;
+				let quantized_value = (fader.live_value() * (steps_f32 - 1.)).round() / (steps_f32 - 1.);
+				let diff = fader.live_value() - quantized_value;
+
+				if diff.abs() >= 0.02 {
+					fader.set_target(quantized_value);
+				}
+			}
+		}
 
 
 
@@ -574,7 +595,7 @@ const APP: () = {
 		}
 	}
 
-	#[task(binds = USB_LP_CAN_RX0, resources=[midi, usb_dev, values, target_values], priority=2)]
+	#[task(binds = USB_LP_CAN_RX0, resources=[midi, usb_dev, values, target_values, fader_steps], priority=2)]
 	fn periodic_usb_poll(mut c : periodic_usb_poll::Context) {
 
 		c.resources.usb_dev.poll(&mut[c.resources.midi]);
