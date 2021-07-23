@@ -28,6 +28,7 @@ use core::convert::Infallible;
 use micromath::F32Ext;
 
 const PERIOD: u32 = 100_000_000;
+const MAX_ACTIVE_FADERS: u16 = 17;
 
 
 #[panic_handler]
@@ -412,20 +413,23 @@ const APP: () = {
 	fn xmain(mut c : xmain::Context) {
 		static mut blink: u64 = 0;
 		static mut last_value: [u16; 17] = [0x42*128; 17];
-		c.resources.mytimer.clear_update_interrupt_flag();
+
+		let res = &mut c.resources;
+		res.mytimer.clear_update_interrupt_flag();
 		
 		*blink += 1;
 		if (*blink) % 100 == 0 {
-			c.resources.led.toggle();
+			res.led.toggle();
 		}
 
-		let faders = &mut c.resources.faders;
-		c.resources.x3423.read_values(|idx, value| { faders[idx].update_value(value) }, c.resources.delay);
+		// read raw fader values
+		let faders = &mut res.faders;
+		res.x3423.read_values(|idx, value| { faders[idx].update_value(value) }, res.delay);
 
-		let mut fader_steps = c.resources.fader_steps.lock(|s| *s);
-		for i in 0..17 { fader_steps[i] = i as u8; }
-		fader_steps[3] = 3;
-		for ((fader, steps), user_flag) in c.resources.faders.iter_mut().zip(fader_steps.iter()).zip(c.resources.fader_processes_user_input.iter()) {
+		// handle steppiness
+		let mut fader_steps = res.fader_steps.lock(|s| *s);
+		for i in 0..17 { fader_steps[i] = i as u8; } // FIXME DEBUG
+		for ((fader, steps), user_flag) in res.faders.iter_mut().zip(fader_steps.iter()).zip(res.fader_processes_user_input.iter()) {
 			if *steps > 1 && !*user_flag {
 				let steps_f32 = *steps as f32;
 				let quantized_value = (fader.live_value() * (steps_f32 - 1.)).round() / (steps_f32 - 1.);
@@ -437,70 +441,59 @@ const APP: () = {
 			}
 		}
 
-
-
-
-		let mut fader_values = [0.0; 17];
-		let mut active_faders = 0;
-		let mut n_active_faders = 0;
-
-		let mut fnord : [Option<u16>; 17] = [None; 17];
-		for i in 0..17 {
-			fader_values[i] = c.resources.faders[i].value();
-
-			fnord[i] = c.resources.faders[i].process();
-			if let Some(target_value) = fnord[i] {
-				active_faders |= 1<<i;
-				n_active_faders += 1;
-
-				if n_active_faders >= 4 {
-					break;
-				}
-			}
-		}
-		c.resources.x3423.set_motor_enable(active_faders);
-		for i in 0..17 {
-			if let Some(target_value) = fnord[i] {
-				c.resources.dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value(target_value));
-				c.resources.delay.delay_us(5_u16);
-				c.resources.x3423.capture_analog_value(i as u8, c.resources.delay);
-			}
-		}
-
-		for (fader, user_flag) in c.resources.faders.iter().zip(c.resources.fader_processes_user_input.iter_mut()) {
-			if fader.target().is_none() {
-				*user_flag = false;
-			}
-		}
-
-
-
-		c.resources.midi.lock(|midi| {
-			for i in 0..17 {
-				assert!(fader_values[i] >= 0.0 && fader_values[i] <= 1.0);
-				let val = (fader_values[i] * 16383.0) as u16;
-				if last_value[i] / 128 != val / 128 {
+		// send current values via MIDI
+		let midi = &mut res.midi;
+		for (i, (fader, last)) in res.faders.iter_mut().zip(last_value.iter_mut()).enumerate()
+		{
+			let val = (fader.value() * 16383.0) as u16;
+			if *last / 128 != val / 128 {
+				midi.lock(|midi| {
 					if midi.send_bytes([0x0B, 0xB0, i as u8 + 1, (val / 128) as u8]).is_ok() {
-						last_value[i] = val;
+						*last = val;
 					}
-				}
+				});
 			}
-		});
+		}
 
 
-
-		let target_values = c.resources.target_values.lock(|target_values| {
+		// set fader values, handle movement and calibration
+		let target_values = res.target_values.lock(|target_values| {
 			let tmp = *target_values;
 			*target_values = [None; 17];
 			tmp
 		});
+		let mut active_faders = 0;
+		let mut n_active_faders = 0;
 		
-		for i in 0..17 {
-			if let Some(val) = target_values[i] {
-				c.resources.faders[i].set_target(val);
-				c.resources.fader_processes_user_input[i] = true;
+		for (i, ((target, fader), user_flag)) in
+			target_values.iter()
+			.zip(res.faders.iter_mut())
+			.zip(res.fader_processes_user_input.iter_mut())
+			.enumerate()
+		{
+			if let Some(val) = *target {
+				fader.set_target(val);
+				*user_flag = true;
+			}
+
+			// set values received via MIDI and process fader movement / calibration
+			if let Some(target_value) = fader.process() {
+				if n_active_faders <= MAX_ACTIVE_FADERS
+				{
+					active_faders |= 1 << i;
+					n_active_faders += 1;
+
+					res.dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value(target_value));
+					res.delay.delay_us(5_u16);
+					res.x3423.capture_analog_value(i as u8, res.delay);
+				}
+			}
+			
+			if fader.target().is_none() {
+				*user_flag = false;
 			}
 		}
+		res.x3423.set_motor_enable(active_faders);
 	}
 
 	#[task(binds = USB_LP_CAN_RX0, resources=[midi, usb_dev, values, target_values, fader_steps], priority=2)]
