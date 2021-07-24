@@ -7,14 +7,13 @@ use x3423::X3423;
 use embedded_hal::digital::v2::OutputPin;
 use embedded_hal::digital::v1_compat::OldOutputPin;
 use rtic::app;
-use stm32f1xx_hal::gpio::{gpiob::*, gpioc::*, Input, Floating, Analog, Alternate, Output, PushPull, OpenDrain, State};
+use stm32f1xx_hal::gpio::{gpiob::*, gpioc::*, Input, Floating, Alternate, Output, PushPull, State};
 use stm32f1xx_hal::spi;
 use stm32f1xx_hal::timer;
 use stm32f1xx_hal::prelude::*;
 use stm32f1xx_hal::delay::Delay;
 use stm32f1xx_hal::usb::{UsbBus, Peripheral, UsbBusType};
-use stm32f1xx_hal::adc::Adc;
-use stm32f1xx_hal::pac::{ADC1, TIM2};
+use stm32f1xx_hal::pac::TIM2;
 use mcp49xx::Mcp49xx;
 use mcp49xx::interface::SpiInterface;
 use mcp49xx::marker::Resolution12Bit;
@@ -23,11 +22,9 @@ use mcp49xx::marker::Unbuffered;
 use stm32f1xx_hal::time::Hertz;
 
 use usb_device::prelude::*;
-use core::convert::Infallible;
 
 use micromath::F32Ext;
 
-const PERIOD: u32 = 100_000_000;
 const MAX_ACTIVE_FADERS: u16 = 17;
 
 
@@ -309,7 +306,7 @@ const APP: () = {
 			.pclk1(36.mhz())
 			.freeze(&mut flash.acr);
 
-		let mut delay = Delay::new(core.SYST, clocks);
+		let delay = Delay::new(core.SYST, clocks);
 
 		// Setup LED
 		let mut gpioa = device.GPIOA.split(&mut rcc.apb2);
@@ -357,9 +354,9 @@ const APP: () = {
 		let dac_cs: OldOutputPin<_> = gpioc.pc15.into_push_pull_output_with_state(&mut gpioc.crh, State::High).into();
 
 		let spi = spi::Spi::spi2(device.SPI2, (sck, spi::NoMiso, mosi), spi::Mode { phase : spi::Phase::CaptureOnFirstTransition, polarity : spi::Polarity::IdleLow }, 5.mhz(), clocks, &mut rcc.apb1);
-		let mut dac = mcp49xx::Mcp49xx::new_mcp4822(spi, dac_cs);
+		let dac = mcp49xx::Mcp49xx::new_mcp4822(spi, dac_cs);
 
-		let mut adc = stm32f1xx_hal::adc::Adc::adc1(device.ADC1, &mut rcc.apb2, clocks);
+		let adc = stm32f1xx_hal::adc::Adc::adc1(device.ADC1, &mut rcc.apb2, clocks);
 
 		let mut mytimer =
 			timer::Timer::tim2(device.TIM2, &clocks, &mut rcc.apb1)
@@ -411,15 +408,15 @@ const APP: () = {
 	
 	#[task(binds = TIM2, resources = [x3423, dac, delay, faders, values, target_values, mytimer, led, midi, fader_steps, fader_processes_user_input], priority=1)]
 	fn xmain(mut c : xmain::Context) {
-		static mut blink: u64 = 0;
-		static mut last_value: [u16; 17] = [0x42*128; 17];
+		static mut BLINK: u64 = 0;
+		static mut LAST_VALUE: [u16; 17] = [0x42*128; 17];
 
 		let res = &mut c.resources;
 		res.mytimer.clear_update_interrupt_flag();
 		
-		*blink += 1;
-		if (*blink) % 100 == 0 {
-			res.led.toggle();
+		*BLINK += 1;
+		if (*BLINK) % 100 == 0 {
+			res.led.toggle().unwrap();
 		}
 
 		// read raw fader values
@@ -443,7 +440,7 @@ const APP: () = {
 
 		// send current values via MIDI
 		let midi = &mut res.midi;
-		for (i, (fader, last)) in res.faders.iter_mut().zip(last_value.iter_mut()).enumerate()
+		for (i, (fader, last)) in res.faders.iter_mut().zip(LAST_VALUE.iter_mut()).enumerate()
 		{
 			let val = (fader.value() * 16383.0) as u16;
 			if *last / 128 != val / 128 {
@@ -483,7 +480,7 @@ const APP: () = {
 					active_faders |= 1 << i;
 					n_active_faders += 1;
 
-					res.dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value(target_value));
+					res.dac.send(mcp49xx::Command::default().double_gain().channel(mcp49xx::Channel::Ch0).value(target_value)).unwrap();
 					res.delay.delay_us(5_u16);
 					res.x3423.capture_analog_value(i as u8, res.delay);
 				}
@@ -497,19 +494,19 @@ const APP: () = {
 	}
 
 	#[task(binds = USB_LP_CAN_RX0, resources=[midi, usb_dev, values, target_values, fader_steps], priority=2)]
-	fn periodic_usb_poll(mut c : periodic_usb_poll::Context) {
+	fn periodic_usb_poll(c : periodic_usb_poll::Context) {
 
 		c.resources.usb_dev.poll(&mut[c.resources.midi]);
 
 		let mut message: [u8; 4] = [0; 4];
 		while let Ok(len) = c.resources.midi.read(&mut message) {
 			if len == 4 {
-				let cable = (message[0] & 0xF0) >> 4;
+				//let cable = (message[0] & 0xF0) >> 4;
 				let messagetype = message[0] & 0x0F;
 
 				match messagetype {
 					0xB => {
-						let channel = message[1] & 0x0F;
+						//let channel = message[1] & 0x0F;
 						let cc = message[2];
 						let value = message[3];
 						if (1..=17).contains(&cc) {
