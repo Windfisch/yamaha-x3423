@@ -335,30 +335,32 @@ const APP: () = {
 
 		c.resources.usb_dev.poll(&mut[c.resources.midi]);
 
-		let mut message: [u8; 4] = [0; 4];
-		while let Ok(len) = c.resources.midi.read(&mut message) {
-			if len == 4 {
-				//let cable = (message[0] & 0xF0) >> 4;
-				let messagetype = message[0] & 0x0F;
+		let mut buffer = [0u8; 128];
+		while let Ok(len) = c.resources.midi.read(&mut buffer) {
+			for message in buffer[0..len].chunks(4) {
+				if message.len() == 4 {
+					//let cable = (message[0] & 0xF0) >> 4;
+					let messagetype = message[0] & 0x0F;
 
-				match messagetype {
-					0xB => {
-						//let channel = message[1] & 0x0F;
-						let cc = message[2];
-						let value = message[3];
-						if (1..=17).contains(&cc) {
-							c.resources.target_values[(cc-1) as usize] = Some(value as f32 / 128.0);
-						}
+					match messagetype {
+						0xB => {
+							//let channel = message[1] & 0x0F;
+							let cc = message[2];
+							let value = message[3];
+							if (1..=17).contains(&cc) {
+								c.resources.target_values[(cc-1) as usize] = Some(value as f32 / 128.0);
+							}
 
-						if (71..87).contains(&cc) {
-							c.resources.fader_steps[(cc-71) as usize] = value;
-						}
+							if (71..87).contains(&cc) {
+								c.resources.fader_steps[(cc-71) as usize] = value;
+							}
 
-						if cc == 100 {
-							*c.resources.calibration_request = Calib::Pending;
+							if cc == 100 {
+								*c.resources.calibration_request = Calib::Pending;
+							}
 						}
+						_ => {}
 					}
-					_ => {}
 				}
 			}
 		}
