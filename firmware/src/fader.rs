@@ -57,9 +57,44 @@ impl Fader {
 			mid_from_below: 0,
 			v25_from_above: 0,
 			integrator: 0.,
-			calibration_phase: FaderCalibrationPhase::Init
+			calibration_phase: FaderCalibrationPhase::NotCalibrating
 		}
 	}
+
+	pub fn start_calibration(&mut self) {
+		self.calibration_phase = FaderCalibrationPhase::Init;
+	}
+
+	pub fn get_calibration_data(&self) -> [u8; 10] {
+		[
+			(self.write_low & 0xFF) as u8,
+			(self.write_low >> 8) as u8,
+			(self.write_high & 0xFF) as u8,
+			(self.write_high >> 8) as u8,
+			(self.write_deadzone & 0xFF) as u8,
+			(self.write_deadzone >> 8) as u8,
+			(self.read_low & 0xFF) as u8,
+			(self.read_low >> 8) as u8,
+			(self.read_high & 0xFF) as u8,
+			(self.read_high >> 8) as u8,
+		]
+	}
+
+	pub fn is_calibrating(&self) -> bool {
+		match self.calibration_phase {
+			FaderCalibrationPhase::NotCalibrating => false,
+			_ => true
+		}
+	}
+
+	pub fn set_calibration_data(&mut self, data: &[u8]) {
+		self.write_low      = (data[0] as u16) + ((data[1] as u16) << 8);
+		self.write_high     = (data[2] as u16) + ((data[3] as u16) << 8);
+		self.write_deadzone = (data[4] as u16) + ((data[5] as u16) << 8);
+		self.read_low       = (data[6] as u16) + ((data[7] as u16) << 8);
+		self.read_high      = (data[8] as u16) + ((data[9] as u16) << 8);
+	}
+
 	pub fn update_value(&mut self, raw: u16) {
 		self.last_value = self.cook_raw_read_value(raw);
 		self.last_value_raw = raw;

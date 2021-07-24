@@ -55,7 +55,13 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 	}
 }
 
-
+#[derive(Clone, Copy, PartialEq)]
+pub enum Calib
+{
+	Pending,
+	Running,
+	Idle
+}
 
 
 #[app(device = stm32f1xx_hal::pac, peripherals = true)]
@@ -76,6 +82,9 @@ const APP: () = {
 		fader_steps: [u8; 17],
 		target_values: [Option<f32>; 17],
 		fader_processes_user_input: [bool; 17],
+		calibration_request: Calib,
+
+		flash: stm32f1xx_hal::flash::Parts,
 	}
 
 	#[init]
@@ -110,7 +119,6 @@ const APP: () = {
 			.pc13
 			.into_push_pull_output_with_state(&mut gpioc.crh, State::Low);
 		led.set_low().unwrap();
-
 
 		// Configure USB
 		// BluePill board has a pull-up resistor on the D+ line.
@@ -187,7 +195,19 @@ const APP: () = {
 			mytimer,
 			fader_steps: [0; 17],
 			fader_processes_user_input: [false; 17],
+			flash,
+			calibration_request: Calib::Idle,
 		};
+
+		
+		let writer = resources.flash.writer(stm32f1xx_hal::flash::SectorSize::Sz2K, stm32f1xx_hal::flash::FlashSize::Sz128K);
+		for i in 0..17 {
+			let params = writer.read(65536-2048 + 10*i, 10).unwrap();
+			if params[0] != 0xFF && params[1] != 0xFF {
+				resources.faders[i as usize].set_calibration_data(params);
+			}
+		}
+
 
 		resources.x3423.reset();
 
@@ -195,7 +215,7 @@ const APP: () = {
 	}
 
 	
-	#[task(binds = TIM2, resources = [x3423, dac, delay, faders, target_values, mytimer, led, midi, fader_steps, fader_processes_user_input], priority=1)]
+	#[task(binds = TIM2, resources = [x3423, dac, delay, faders, target_values, mytimer, led, midi, fader_steps, fader_processes_user_input, calibration_request, flash], priority=1)]
 	fn xmain(mut c : xmain::Context) {
 		static mut BLINK: u64 = 0;
 		static mut LAST_VALUE: [u16; 17] = [0x42*128; 17];
@@ -213,8 +233,7 @@ const APP: () = {
 		res.x3423.read_values(|idx, value| { faders[idx].update_value(value) }, res.delay);
 
 		// handle steppiness
-		let mut fader_steps = res.fader_steps.lock(|s| *s);
-		for i in 0..17 { fader_steps[i] = i as u8; } // FIXME DEBUG
+		let fader_steps = res.fader_steps.lock(|s| *s);
 		for ((fader, steps), user_flag) in res.faders.iter_mut().zip(fader_steps.iter()).zip(res.fader_processes_user_input.iter()) {
 			if *steps > 1 && !*user_flag {
 				let steps_f32 = *steps as f32;
@@ -280,9 +299,38 @@ const APP: () = {
 			}
 		}
 		res.x3423.set_motor_enable(active_faders);
+
+		match res.calibration_request.lock(|c| *c)
+		{
+			Calib::Running => {
+				if !res.faders.iter().any(|fader| fader.is_calibrating()) {
+					// save to flash
+					let mut data: [u8; 170] = [0; 170];
+					for i in 0..17 {
+						let calib = res.faders[i].get_calibration_data();
+						for j in 0..10 {
+							data[i*10 + j] = calib[j];
+						}
+					}
+
+					let mut writer = res.flash.writer(stm32f1xx_hal::flash::SectorSize::Sz2K, stm32f1xx_hal::flash::FlashSize::Sz128K);
+					writer.erase(65536-2048, 2*1024).unwrap();
+					writer.write(65536-2048, &data).unwrap();
+
+					res.calibration_request.lock(|c| *c = Calib::Idle);
+				}
+			}
+			Calib::Pending => {
+				for fader in res.faders.iter_mut() {
+					fader.start_calibration();
+				}
+				res.calibration_request.lock(|c| *c = Calib::Running);
+			}
+			Calib::Idle => {}
+		}
 	}
 
-	#[task(binds = USB_LP_CAN_RX0, resources=[midi, usb_dev, target_values, fader_steps], priority=2)]
+	#[task(binds = USB_LP_CAN_RX0, resources=[midi, usb_dev, target_values, fader_steps, calibration_request], priority=2)]
 	fn periodic_usb_poll(c : periodic_usb_poll::Context) {
 
 		c.resources.usb_dev.poll(&mut[c.resources.midi]);
@@ -300,6 +348,14 @@ const APP: () = {
 						let value = message[3];
 						if (1..=17).contains(&cc) {
 							c.resources.target_values[(cc-1) as usize] = Some(value as f32 / 128.0);
+						}
+
+						if (71..87).contains(&cc) {
+							c.resources.fader_steps[(cc-71) as usize] = value;
+						}
+
+						if cc == 100 {
+							*c.resources.calibration_request = Calib::Pending;
 						}
 					}
 					_ => {}
