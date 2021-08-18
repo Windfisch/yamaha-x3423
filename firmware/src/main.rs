@@ -314,6 +314,7 @@ const APP: () = {
 					}
 
 					let mut writer = res.flash.writer(stm32f1xx_hal::flash::SectorSize::Sz2K, stm32f1xx_hal::flash::FlashSize::Sz128K);
+					writer.change_verification(false);
 					writer.erase(65536-2048, 2*1024).unwrap();
 					writer.write(65536-2048, &data).unwrap();
 
