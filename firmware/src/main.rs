@@ -73,22 +73,27 @@ pub enum FaderState {
 
 pub struct Queue {
 	history: [f32; 128],
-	pointer: usize
+	pointer: usize,
+	counter: u16
 }
 
 impl Queue {
-	pub const fn new() -> Queue { Queue { history: [0.0; 128], pointer: 0 } }
+	const SPARSITY: u16 = 20;
+	pub const fn new() -> Queue { Queue { history: [0.0; 128], pointer: 0, counter: 0 } }
 	pub fn push(&mut self, value: f32) {
-		self.history[self.pointer] = value;
-		self.pointer = (self.pointer + 1) % self.history.len();
+		if self.counter == 0 {
+			self.history[self.pointer] = value;
+			self.pointer = (self.pointer + 1) % self.history.len();
+		}
+		self.counter = (self.counter + 1) % Self::SPARSITY;
 	}
 	pub fn delta(&self) -> f32 {
 		self.history.iter().max_by(|a,b| a.partial_cmp(b).unwrap()).unwrap() - self.history.iter().min_by(|a,b| a.partial_cmp(b).unwrap()).unwrap()
 	}
 
 	pub fn trend(&self) -> f32 {
-		let prev_pointer = (self.pointer + self.history.len() - 1) % self.history.len();
-		return self.history[self.pointer] - self.history[prev_pointer];
+		let most_recent_pointer = (self.pointer + self.history.len() - 1) % self.history.len();
+		return self.history[most_recent_pointer] - self.history[self.pointer];
 	}
 }
 
@@ -129,10 +134,10 @@ impl FaderStateMachine {
 	}
 	pub fn process(&mut self, setpoint: f32, measured: f32) -> FaderResult {
 		let JUMP_THRESHOLD = 1.0;
-		let SET_DEADZONE = 0.01;
-		let ESCAPE_LIMIT = 5.0;
-		let INPUT_DEADZONE = 0.02;
-		let CAPTURE_ZONE = 0.03;
+		let SET_DEADZONE = 0.015;
+		let ESCAPE_LIMIT = 0.2;
+		let INPUT_DEADZONE = 0.01;
+		let CAPTURE_ZONE = 0.02;
 		let STABILIZE_TIMEOUT = 500;
 
 		self.measured_history.push(measured);
@@ -202,9 +207,15 @@ impl FaderStateMachine {
 			}
 			FaderState::UserControlled => {
 				let expected_trend_signum = (measured - setpoint).signum();
-				if self.measured_history.delta() < INPUT_DEADZONE && (self.setpoint_history.trend().signum() != expected_trend_signum || self.setpoint_history.delta() < SET_DEADZONE || (setpoint - measured).abs() < SET_DEADZONE) {
-					self.state = FaderState::Idle;
+				if self.measured_history.delta() < INPUT_DEADZONE {
+					if (setpoint - measured).abs() < SET_DEADZONE {
+						self.state = FaderState::Idle;
+					}
+					else if self.setpoint_history.trend().signum() != expected_trend_signum || self.setpoint_history.delta() < SET_DEADZONE {
+						self.state = FaderState::MidiControlledJump;
+					}
 				}
+				
 				if (setpoint - measured).abs() >= ESCAPE_LIMIT {
 					self.state = FaderState::UserOverride;
 				}
@@ -225,8 +236,13 @@ impl FaderStateMachine {
 			}
 			FaderState::UserOverride => {
 				let expected_trend_signum = (measured - setpoint).signum();
-				if self.measured_history.delta() < INPUT_DEADZONE && (self.setpoint_history.trend().signum() != expected_trend_signum || self.setpoint_history.delta() < SET_DEADZONE || (setpoint - measured).abs() < SET_DEADZONE) {
-					self.state = FaderState::Idle;
+				if self.measured_history.delta() < INPUT_DEADZONE {
+					if (setpoint - measured).abs() < SET_DEADZONE {
+						self.state = FaderState::Idle;
+					}
+					else if self.setpoint_history.trend().signum() != expected_trend_signum || self.setpoint_history.delta() < SET_DEADZONE {
+						self.state = FaderState::MidiControlledJump;
+					}
 				}
 
 				FaderResult {
@@ -448,10 +464,10 @@ const APP: () = {
 		});
 
 
-		let result = BLAH.process(res.faders[1].value(), res.faders[2].value());
+		let result = BLAH.process(res.faders[1].live_value(), res.faders[2].live_value());
 		target_values[2] = result.fader_move_target;
 
-		let result2 = BLUBB.process(*BLUBB_SOLL, res.faders[3].value());
+		let result2 = BLUBB.process(*BLUBB_SOLL, res.faders[3].live_value());
 		if let Some(val) = result2.midi_send_value {
 			*BLUBB_SOLL += 0.0003 * (val - *BLUBB_SOLL).signum();
 			*BLUBB_SOLL = BLUBB_SOLL.clamp(0.0,1.0);
