@@ -27,7 +27,12 @@ use usb_device::prelude::*;
 
 use micromath::F32Ext;
 
-const MAX_ACTIVE_FADERS: u16 = 17;
+
+const BASE_CURRENT: f32 = 0.3; // Ampere
+const FADER_CURRENT: f32 = 0.25; // Ampere. Note: this is only for slow movement and stall. Large jumps draw more current!
+const CURRENT_LIMIT: f32 = 3.33; // Ampere.
+const MAX_ACTIVE_FADERS: u16 = ((CURRENT_LIMIT - BASE_CURRENT) / FADER_CURRENT) as u16;
+const MAX_ACTIVE_FADERS_DURING_CALIBRATION: u16 = 3;
 
 
 #[panic_handler]
@@ -479,6 +484,10 @@ const APP: () = {
 
 		let mut active_faders = 0;
 		let mut n_active_faders = 0;
+		let fader_limit = match res.calibration_request.lock(|c|*c) {
+			Calib::Idle => MAX_ACTIVE_FADERS,
+			_ => MAX_ACTIVE_FADERS_DURING_CALIBRATION
+		};
 		
 		for (i, ((target, fader), user_flag)) in
 			target_values.iter()
@@ -495,9 +504,9 @@ const APP: () = {
 			}
 
 			// set values received via MIDI and process fader movement / calibration
-			if let Some(target_value) = fader.process() {
-				if n_active_faders <= MAX_ACTIVE_FADERS
-				{
+			if n_active_faders < fader_limit
+			{
+				if let Some(target_value) = fader.process() {
 					active_faders |= 1 << i;
 					n_active_faders += 1;
 
