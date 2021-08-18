@@ -63,6 +63,181 @@ pub enum Calib
 	Idle
 }
 
+pub enum FaderState {
+	Idle,
+	UserControlled,
+	UserOverride,
+	MidiControlledSlow,
+	MidiControlledJump
+}
+
+pub struct Queue {
+	history: [f32; 128],
+	pointer: usize
+}
+
+impl Queue {
+	pub const fn new() -> Queue { Queue { history: [0.0; 128], pointer: 0 } }
+	pub fn push(&mut self, value: f32) {
+		self.history[self.pointer] = value;
+		self.pointer = (self.pointer + 1) % self.history.len();
+	}
+	pub fn delta(&self) -> f32 {
+		self.history.iter().max_by(|a,b| a.partial_cmp(b).unwrap()).unwrap() - self.history.iter().min_by(|a,b| a.partial_cmp(b).unwrap()).unwrap()
+	}
+
+	pub fn trend(&self) -> f32 {
+		let prev_pointer = (self.pointer + self.history.len() - 1) % self.history.len();
+		return self.history[self.pointer] - self.history[prev_pointer];
+	}
+}
+
+pub struct FaderStateMachine {
+	state: FaderState,
+	old_setpoint: f32,
+	stable_timer: u32,
+	measured_history: Queue,
+	setpoint_history: Queue,
+}
+
+pub struct FaderResult {
+	pub fader_move_target: Option<f32>,
+	pub midi_send_value: Option<f32>
+}
+
+trait Signum {
+	fn signum(self) -> Self;
+}
+
+impl Signum for f32 {
+	fn signum(self) -> f32 {
+		if self > 0.0 { return 1.0; }
+		else if self < 0.0 { return -1.0; }
+		else { return 0.0; }
+	}
+}
+
+impl FaderStateMachine {
+	pub const fn new() -> FaderStateMachine {
+		FaderStateMachine {
+			state: FaderState::Idle,
+			old_setpoint: 0.5,
+			stable_timer: 0,
+			measured_history: Queue::new(),
+			setpoint_history: Queue::new()
+		}
+	}
+	pub fn process(&mut self, setpoint: f32, measured: f32) -> FaderResult {
+		let JUMP_THRESHOLD = 1.0;
+		let SET_DEADZONE = 0.01;
+		let ESCAPE_LIMIT = 5.0;
+		let INPUT_DEADZONE = 0.02;
+		let CAPTURE_ZONE = 0.03;
+		let STABILIZE_TIMEOUT = 500;
+
+		self.measured_history.push(measured);
+		self.setpoint_history.push(setpoint);
+
+		if (setpoint - measured).abs() < SET_DEADZONE {
+			self.stable_timer = self.stable_timer.saturating_add(1);
+		}
+		else {
+			self.stable_timer = 0;
+		}
+
+		let setpoint_diff = (self.old_setpoint - setpoint).abs();
+		if setpoint_diff >= SET_DEADZONE {
+			self.old_setpoint = setpoint;
+		}
+
+		match self.state {
+			FaderState::Idle => {
+				if setpoint_diff >= JUMP_THRESHOLD {
+					self.state = FaderState::MidiControlledJump;
+				}
+				else if setpoint_diff >= SET_DEADZONE {
+					self.state = FaderState::MidiControlledSlow;
+				}
+			
+				if (setpoint - measured).abs() >= ESCAPE_LIMIT {
+					self.state = FaderState::UserOverride;
+				}
+				else if (setpoint - measured).abs() >= INPUT_DEADZONE {
+					self.state = FaderState::UserControlled;
+				}
+				
+				FaderResult {
+					fader_move_target: None,
+					midi_send_value: None
+				}
+			}
+			FaderState::MidiControlledSlow => {
+				if setpoint_diff >= JUMP_THRESHOLD {
+					self.state = FaderState::MidiControlledJump;
+				}
+				if self.stable_timer >= STABILIZE_TIMEOUT {
+					self.state = FaderState::Idle;
+				}
+				if (setpoint - measured).abs() >= ESCAPE_LIMIT {
+					self.state = FaderState::UserOverride;
+				}
+				else if (setpoint - measured).abs() >= INPUT_DEADZONE {
+					self.state = FaderState::UserControlled;
+				}
+
+				FaderResult {
+					fader_move_target: Some(setpoint),
+					midi_send_value: None
+				}
+			}
+			FaderState::MidiControlledJump => {
+				if self.stable_timer >= STABILIZE_TIMEOUT {
+					self.state = FaderState::Idle;
+				}
+
+				FaderResult {
+					fader_move_target: Some(setpoint),
+					midi_send_value: None
+				}
+			}
+			FaderState::UserControlled => {
+				let expected_trend_signum = (measured - setpoint).signum();
+				if self.measured_history.delta() < INPUT_DEADZONE && (self.setpoint_history.trend().signum() != expected_trend_signum || self.setpoint_history.delta() < SET_DEADZONE || (setpoint - measured).abs() < SET_DEADZONE) {
+					self.state = FaderState::Idle;
+				}
+				if (setpoint - measured).abs() >= ESCAPE_LIMIT {
+					self.state = FaderState::UserOverride;
+				}
+
+				let fader_move_target =
+					if (setpoint - measured).abs() < CAPTURE_ZONE {
+						None
+					}
+					else {
+						let limit = setpoint + CAPTURE_ZONE * (measured - setpoint).signum();
+						Some( limit.clamp(0.0, 1.0) )
+					};
+
+				FaderResult {
+					fader_move_target,
+					midi_send_value: Some(measured)
+				}
+			}
+			FaderState::UserOverride => {
+				let expected_trend_signum = (measured - setpoint).signum();
+				if self.measured_history.delta() < INPUT_DEADZONE && (self.setpoint_history.trend().signum() != expected_trend_signum || self.setpoint_history.delta() < SET_DEADZONE || (setpoint - measured).abs() < SET_DEADZONE) {
+					self.state = FaderState::Idle;
+				}
+
+				FaderResult {
+					fader_move_target: None,
+					midi_send_value: Some(measured)
+				}
+			}
+		}
+	}
+}
+
 
 #[app(device = stm32f1xx_hal::pac, peripherals = true)]
 const APP: () = {
@@ -220,6 +395,10 @@ const APP: () = {
 		static mut BLINK: u64 = 0;
 		static mut LAST_VALUE: [u16; 17] = [0x42*128; 17];
 
+		static mut BLAH: FaderStateMachine = FaderStateMachine::new();
+		static mut BLUBB: FaderStateMachine = FaderStateMachine::new();
+		static mut BLUBB_SOLL: f32 = 0.5;
+
 		let res = &mut c.resources;
 		res.mytimer.clear_update_interrupt_flag();
 		
@@ -262,11 +441,26 @@ const APP: () = {
 
 
 		// set fader values, handle movement and calibration
-		let target_values = res.target_values.lock(|target_values| {
+		let mut target_values = res.target_values.lock(|target_values| {
 			let tmp = *target_values;
 			*target_values = [None; 17];
 			tmp
 		});
+
+
+		let result = BLAH.process(res.faders[1].value(), res.faders[2].value());
+		target_values[2] = result.fader_move_target;
+
+		let result2 = BLUBB.process(*BLUBB_SOLL, res.faders[3].value());
+		if let Some(val) = result2.midi_send_value {
+			*BLUBB_SOLL += 0.0003 * (val - *BLUBB_SOLL).signum();
+			*BLUBB_SOLL = BLUBB_SOLL.clamp(0.0,1.0);
+		}
+		target_values[3] = result2.fader_move_target;
+		target_values[4] = Some(*BLUBB_SOLL);
+
+
+
 		let mut active_faders = 0;
 		let mut n_active_faders = 0;
 		
@@ -279,6 +473,9 @@ const APP: () = {
 			if let Some(val) = *target {
 				fader.set_target(val);
 				*user_flag = true;
+			}
+			else {
+				fader.clear_target(); // FIXME
 			}
 
 			// set values received via MIDI and process fader movement / calibration
