@@ -223,7 +223,7 @@ impl Fader {
 
 	fn process_normal(&mut self) -> Option<u16> {
 		if let Some(target) = self.target_value {
-			if self.last_value - target < 0.02 {
+			if (self.last_value - target).abs() < 0.02 {
 				self.time_left = self.time_left.min(200);
 			}
 			if self.time_left == 0 {
