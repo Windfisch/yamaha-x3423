@@ -77,28 +77,33 @@ pub enum FaderState {
 }
 
 pub struct Queue {
-	history: [f32; 128],
+	history: [u16; 128],
 	pointer: usize,
 	counter: u16
 }
 
 impl Queue {
-	const SPARSITY: u16 = 20;
-	pub const fn new() -> Queue { Queue { history: [0.0; 128], pointer: 0, counter: 0 } }
+	const SPARSITY: u16 = 12;
+	pub const fn new() -> Queue { Queue { history: [0; 128], pointer: 0, counter: 0 } }
+
+	fn u16_to_f32(value: u16) -> f32 {
+		value as f32 / 65535.0
+	}
+
 	pub fn push(&mut self, value: f32) {
 		if self.counter == 0 {
-			self.history[self.pointer] = value;
+			self.history[self.pointer] = (value * 65535.0) as u16;
 			self.pointer = (self.pointer + 1) % self.history.len();
 		}
 		self.counter = (self.counter + 1) % Self::SPARSITY;
 	}
 	pub fn delta(&self) -> f32 {
-		self.history.iter().max_by(|a,b| a.partial_cmp(b).unwrap()).unwrap() - self.history.iter().min_by(|a,b| a.partial_cmp(b).unwrap()).unwrap()
+		Self::u16_to_f32(*self.history.iter().max().unwrap()) - Self::u16_to_f32(*self.history.iter().min().unwrap())
 	}
 
 	pub fn trend(&self) -> f32 {
 		let most_recent_pointer = (self.pointer + self.history.len() - 1) % self.history.len();
-		return self.history[most_recent_pointer] - self.history[self.pointer];
+		return Self::u16_to_f32(self.history[most_recent_pointer]) - Self::u16_to_f32(self.history[self.pointer]);
 	}
 }
 
