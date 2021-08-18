@@ -464,8 +464,7 @@ const APP: () = {
 				});
 			}
 		}
-
-
+		
 		// set fader values, handle movement and calibration
 		let mut target_values = res.target_values.lock(|target_values| {
 			let tmp = *target_values;
@@ -473,17 +472,21 @@ const APP: () = {
 			tmp
 		});
 
+		match res.calibration_request.lock(|c|*c) {
+			Calib::Idle => {
+				let result = BLAH.process(res.faders[1].live_value(), res.faders[2].live_value());
+				target_values[2] = result.fader_move_target;
 
-		let result = BLAH.process(res.faders[1].live_value(), res.faders[2].live_value());
-		target_values[2] = result.fader_move_target;
-
-		let result2 = BLUBB.process(*BLUBB_SOLL, res.faders[3].live_value());
-		if let Some(val) = result2.midi_send_value {
-			*BLUBB_SOLL += 0.0003 * (val - *BLUBB_SOLL).signum();
-			*BLUBB_SOLL = BLUBB_SOLL.clamp(0.0,1.0);
+				let result2 = BLUBB.process(*BLUBB_SOLL, res.faders[3].live_value());
+				if let Some(val) = result2.midi_send_value {
+					*BLUBB_SOLL += 0.0003 * (val - *BLUBB_SOLL).signum();
+					*BLUBB_SOLL = BLUBB_SOLL.clamp(0.0,1.0);
+				}
+				target_values[3] = result2.fader_move_target;
+				target_values[4] = Some(*BLUBB_SOLL);
+			}
+			_ => {}
 		}
-		target_values[3] = result2.fader_move_target;
-		target_values[4] = Some(*BLUBB_SOLL);
 
 
 
@@ -505,7 +508,7 @@ const APP: () = {
 				*user_flag = true;
 			}
 			else {
-				fader.clear_target(); // FIXME
+				fader.clear_target();
 			}
 
 			// set values received via MIDI and process fader movement / calibration
