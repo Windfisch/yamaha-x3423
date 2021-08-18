@@ -4,7 +4,7 @@ all: debug.bin release.bin
 	arm-none-eabi-objcopy -O binary $< $@
 
 flash.%: %.bin
-	stm32flash /dev/ttyUSB0 -b115200 -w $<
+	stm32flash /dev/ttyUSB* -b38400 -w $< -e 60
 
 .PHONY: target/thumbv7m-none-eabi/debug/yamahax3423
 .PHONY: target/thumbv7m-none-eabi/release/yamahax3423
