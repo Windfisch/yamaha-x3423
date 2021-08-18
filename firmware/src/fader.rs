@@ -127,6 +127,14 @@ impl Fader {
 			_ => {}
 		}
 	}
+	pub fn clear_target(&mut self) {
+		match self.calibration_phase {
+			FaderCalibrationPhase::NotCalibrating => {
+				self.target_value = None;
+			}
+			_ => {}
+		}
+	}
 	pub fn target(&self) -> Option<f32> {
 		self.target_value
 	}
