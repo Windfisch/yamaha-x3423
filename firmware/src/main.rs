@@ -303,10 +303,10 @@ impl SlewTarget {
 	}
 	pub fn slew_value(&mut self) -> f32 {
 		if self.current_value > self.target_value {
-			self.current_value = (self.current_value - 0.003).clamp(self.target_value, 1.0);
+			self.current_value = (self.current_value - 0.002).clamp(self.target_value, 1.0);
 		}
 		else if self.current_value < self.target_value {
-			self.current_value = (self.current_value + 0.003).clamp(0.0, self.target_value);
+			self.current_value = (self.current_value + 0.002).clamp(0.0, self.target_value);
 		}
 		return self.current_value;
 	}
