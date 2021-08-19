@@ -114,6 +114,7 @@ pub struct FaderStateMachine {
 	state: FaderState,
 	old_setpoint: f32,
 	stable_timer: u32,
+	jump_count: u32,
 	measured_history: Queue,
 	setpoint_history: Queue,
 }
@@ -141,6 +142,7 @@ impl FaderStateMachine {
 			state: FaderState::Idle,
 			old_setpoint: 0.5,
 			stable_timer: 0,
+			jump_count: 0,
 			measured_history: Queue::new(),
 			setpoint_history: Queue::new()
 		}
@@ -154,6 +156,7 @@ impl FaderStateMachine {
 		let INPUT_DEADZONE_WHEN_MIDI_CONTROLLED = 0.15;
 		let CAPTURE_ZONE = 0.06;
 		let STABILIZE_TIMEOUT = 500;
+		let JUMP_TIMEOUT = 2000;
 
 		self.measured_history.push(measured);
 		self.setpoint_history.push(setpoint);
@@ -175,6 +178,7 @@ impl FaderStateMachine {
 			FaderState::Idle => {
 				if setpoint_diff >= JUMP_THRESHOLD {
 					self.state = FaderState::MidiControlledJump;
+					self.jump_count = 0;
 				}
 				else if setpoint_diff > SETPOINT_DEADZONE {
 					self.state = FaderState::MidiControlledSlow;
@@ -199,6 +203,7 @@ impl FaderStateMachine {
 			FaderState::MidiControlledSlow => {
 				if setpoint_diff >= JUMP_THRESHOLD {
 					self.state = FaderState::MidiControlledJump;
+					self.jump_count = 0;
 				}
 				if self.stable_timer >= STABILIZE_TIMEOUT {
 					self.state = FaderState::Idle;
@@ -223,6 +228,10 @@ impl FaderStateMachine {
 				if self.stable_timer >= STABILIZE_TIMEOUT {
 					self.state = FaderState::Idle;
 				}
+				if self.jump_count >= JUMP_TIMEOUT {
+					self.state = FaderState::Idle;
+				}
+				self.jump_count += 1;
 
 				FaderResult {
 					fader_move_target: Some(setpoint),
@@ -237,6 +246,7 @@ impl FaderStateMachine {
 					}
 					else if self.setpoint_history.trend().signum() != expected_trend_signum || self.setpoint_history.delta() < SET_DEADZONE {
 						self.state = FaderState::MidiControlledJump;
+						self.jump_count = 0;
 					}
 				}
 				
@@ -266,6 +276,7 @@ impl FaderStateMachine {
 					}
 					else if self.setpoint_history.trend().signum() != expected_trend_signum || self.setpoint_history.delta() < SET_DEADZONE {
 						self.state = FaderState::MidiControlledJump;
+						self.jump_count = 0;
 					}
 				}
 
