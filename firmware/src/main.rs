@@ -151,6 +151,7 @@ impl FaderStateMachine {
 		let SETPOINT_DEADZONE = 0.001;
 		let ESCAPE_LIMIT = 0.2;
 		let INPUT_DEADZONE = 0.05;
+		let INPUT_DEADZONE_WHEN_MIDI_CONTROLLED = 0.15;
 		let CAPTURE_ZONE = 0.06;
 		let STABILIZE_TIMEOUT = 500;
 
@@ -207,7 +208,7 @@ impl FaderStateMachine {
 					self.measured_history.push(1.0);
 					self.measured_history.push(0.0);
 				}
-				else if (setpoint - measured).abs() >= 3.*INPUT_DEADZONE {
+				else if (setpoint - measured).abs() >= INPUT_DEADZONE_WHEN_MIDI_CONTROLLED {
 					self.state = FaderState::UserControlled;
 					self.measured_history.push(1.0);
 					self.measured_history.push(0.0);
