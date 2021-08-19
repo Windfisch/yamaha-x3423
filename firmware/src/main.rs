@@ -68,6 +68,7 @@ pub enum Calib
 	Idle
 }
 
+#[derive(Clone, Copy)]
 pub enum FaderState {
 	Idle,
 	UserControlled,
@@ -76,15 +77,16 @@ pub enum FaderState {
 	MidiControlledJump
 }
 
+#[derive(Clone, Copy)]
 pub struct Queue {
-	history: [u16; 128],
+	history: [u16; 64],
 	pointer: usize,
 	counter: u16
 }
 
 impl Queue {
-	const SPARSITY: u16 = 12;
-	pub const fn new() -> Queue { Queue { history: [0; 128], pointer: 0, counter: 0 } }
+	const SPARSITY: u16 = 24;
+	pub const fn new() -> Queue { Queue { history: [0; 64], pointer: 0, counter: 0 } }
 
 	fn u16_to_f32(value: u16) -> f32 {
 		value as f32 / 65535.0
@@ -107,6 +109,7 @@ impl Queue {
 	}
 }
 
+#[derive(Copy,Clone)]
 pub struct FaderStateMachine {
 	state: FaderState,
 	old_setpoint: f32,
@@ -143,11 +146,11 @@ impl FaderStateMachine {
 		}
 	}
 	pub fn process(&mut self, setpoint: f32, measured: f32) -> FaderResult {
-		let JUMP_THRESHOLD = 1.0;
-		let SET_DEADZONE = 0.015;
+		let JUMP_THRESHOLD = 3.0;
+		let SET_DEADZONE = 0.02;
 		let ESCAPE_LIMIT = 0.2;
-		let INPUT_DEADZONE = 0.01;
-		let CAPTURE_ZONE = 0.02;
+		let INPUT_DEADZONE = 0.02;
+		let CAPTURE_ZONE = 0.03;
 		let STABILIZE_TIMEOUT = 500;
 
 		self.measured_history.push(measured);
@@ -264,6 +267,55 @@ impl FaderStateMachine {
 	}
 }
 
+#[derive(Copy,Clone)]
+pub struct SlewTarget {
+	target_value: f32,
+	current_value: f32,
+}
+
+impl SlewTarget {
+	pub fn new() -> SlewTarget { SlewTarget { target_value: 0.5, current_value: 0.0 } }
+	pub fn set_target(&mut self, value: f32) {
+		self.target_value = value;
+	}
+	pub fn slew_value(&mut self) -> f32 {
+		if self.current_value > self.target_value {
+			self.current_value = (self.current_value - 0.003).clamp(self.target_value, 1.0);
+		}
+		else if self.current_value < self.target_value {
+			self.current_value = (self.current_value + 0.003).clamp(0.0, self.target_value);
+		}
+		return self.current_value;
+	}
+}
+
+pub struct MidiSender {
+	last_values: [f32; 17]
+}
+impl MidiSender {
+	pub fn new() -> MidiSender { MidiSender { last_values: [-1.0; 17] } }
+	pub fn send_midi_cc(&mut self, idx: usize, value: f32, midi: &mut usbd_midi::midi_device::MidiClass<'static, UsbBus<Peripheral>>) {
+		let cc_number = idx as u8 + 1;
+		if (self.last_values[idx] - value).abs() > 0.005 {
+			let val = (value * 16383.0) as u16;
+			let lsb = (val % 128) as u8;
+			let msb = (val / 128) as u8;
+			
+			if midi.send_bytes(&[0x0B, 0xB0, cc_number + 32, lsb, 0x0B, 0xB0, cc_number, msb]).is_ok() {
+				self.last_values[idx] = value;
+			}
+		}
+	}
+}
+
+
+
+#[derive(Clone, Copy)]
+pub enum FaderConfig {
+	Continuous,
+	Steps(u8),
+	Bidirectional,
+}
 
 #[app(device = stm32f1xx_hal::pac, peripherals = true)]
 const APP: () = {
@@ -280,12 +332,16 @@ const APP: () = {
 		x3423: X3423,
 
 		faders: [Fader; 17],
-		fader_steps: [u8; 17],
-		target_values: [Option<f32>; 17],
-		fader_processes_user_input: [bool; 17],
+		fader_config: [FaderConfig; 17],
+		fader_midi_commands: [Option<f32>; 17],
+		fader_processes_midi_command: [bool; 17],
 		calibration_request: Calib,
 
 		flash: stm32f1xx_hal::flash::Parts,
+
+		midi_sender: MidiSender,
+		fader_bidir: [FaderStateMachine; 17],
+		fader_bidir_target: [SlewTarget; 17]
 	}
 
 	#[init]
@@ -392,12 +448,15 @@ const APP: () = {
 			dac,
 			delay,
 			faders: Default::default(),
-			target_values: [None; 17],
+			fader_midi_commands: [None; 17],
 			mytimer,
-			fader_steps: [0; 17],
-			fader_processes_user_input: [false; 17],
+			fader_config: [FaderConfig::Bidirectional; 17],
+			fader_processes_midi_command: [false; 17],
 			flash,
 			calibration_request: Calib::Idle,
+			midi_sender: MidiSender::new(),
+			fader_bidir: [FaderStateMachine::new(); 17],
+			fader_bidir_target: [SlewTarget::new(); 17]
 		};
 
 		
@@ -409,21 +468,15 @@ const APP: () = {
 			}
 		}
 
-
 		resources.x3423.reset();
 
 		resources
 	}
 
 	
-	#[task(binds = TIM2, resources = [x3423, dac, delay, faders, target_values, mytimer, led, midi, fader_steps, fader_processes_user_input, calibration_request, flash], priority=1)]
+	#[task(binds = TIM2, resources = [x3423, dac, delay, faders, fader_midi_commands, mytimer, led, midi, fader_config, fader_processes_midi_command, calibration_request, flash, midi_sender, fader_bidir, fader_bidir_target], priority=1)]
 	fn xmain(mut c : xmain::Context) {
 		static mut BLINK: u64 = 0;
-		static mut LAST_VALUE: [u16; 17] = [0x42*128; 17];
-
-		static mut BLAH: FaderStateMachine = FaderStateMachine::new();
-		static mut BLUBB: FaderStateMachine = FaderStateMachine::new();
-		static mut BLUBB_SOLL: f32 = 0.5;
 
 		let res = &mut c.resources;
 		res.mytimer.clear_update_interrupt_flag();
@@ -433,63 +486,76 @@ const APP: () = {
 			res.led.toggle().unwrap();
 		}
 
+		let calibration_state = res.calibration_request.lock(|c|*c);
+
+		let fader_midi_commands = res.fader_midi_commands.lock(|fader_midi_commands| {
+			let tmp = *fader_midi_commands;
+			*fader_midi_commands = [None; 17];
+			tmp
+		});
+
 		// read raw fader values
 		let faders = &mut res.faders;
 		res.x3423.read_values(|idx, value| { faders[idx].update_value(value) }, res.delay);
 
-		// handle steppiness
-		let fader_steps = res.fader_steps.lock(|s| *s);
-		for ((fader, steps), user_flag) in res.faders.iter_mut().zip(fader_steps.iter()).zip(res.fader_processes_user_input.iter()) {
-			if *steps > 1 && !*user_flag {
-				let steps_f32 = *steps as f32;
-				let quantized_value = (fader.live_value() * (steps_f32 - 1.)).round() / (steps_f32 - 1.);
-				let diff = fader.live_value() - quantized_value;
+		// do all the fader processing
+		if calibration_state == Calib::Idle {
+			let faders = &mut res.faders;
+			let fader_config = res.fader_config.lock(|s| *s);
+			for i in 0..17 {
+				match fader_config[i] {
+					FaderConfig::Steps(steps) => {
+						if !res.fader_processes_midi_command[i] {
+							let steps_f32 = steps as f32;
+							let quantized_value = (faders[i].live_value() * (steps_f32 - 1.)).round() / (steps_f32 - 1.);
+							let diff = faders[i].live_value() - quantized_value;
 
-				if diff.abs() >= 0.02 {
-					fader.set_target(quantized_value);
-				}
-			}
-		}
+							if diff.abs() >= 0.02 {
+								faders[i].set_target(quantized_value);
+							}
+						}
+						
+						let midi_sender = &mut res.midi_sender;
+						res.midi.lock(|midi| midi_sender.send_midi_cc(i, faders[i].value(), midi));
 
-		// send current values via MIDI
-		let midi = &mut res.midi;
-		for (i, (fader, last)) in res.faders.iter_mut().zip(LAST_VALUE.iter_mut()).enumerate()
-		{
-			let val = (fader.value() * 16383.0) as u16;
-			if *last / 128 != val / 128 {
-				midi.lock(|midi| {
-					if midi.send_bytes([0x0B, 0xB0, i as u8 + 1, (val / 128) as u8]).is_ok() {
-						*last = val;
+						if let Some(target) = fader_midi_commands[i] {
+							faders[i].set_target(target);
+							res.fader_processes_midi_command[i] = true;
+						}
 					}
-				});
-			}
-		}
-		
-		// set fader values, handle movement and calibration
-		let mut target_values = res.target_values.lock(|target_values| {
-			let tmp = *target_values;
-			*target_values = [None; 17];
-			tmp
-		});
+					FaderConfig::Bidirectional => {
+						if let Some(value) = fader_midi_commands[i] {
+							res.fader_bidir_target[i].set_target(value);
+						}
 
-		match res.calibration_request.lock(|c|*c) {
-			Calib::Idle => {
-				let result = BLAH.process(res.faders[1].live_value(), res.faders[2].live_value());
-				target_values[2] = result.fader_move_target;
+						let result = res.fader_bidir[i].process(res.fader_bidir_target[i].slew_value(), faders[i].live_value());
 
-				let result2 = BLUBB.process(*BLUBB_SOLL, res.faders[3].live_value());
-				if let Some(val) = result2.midi_send_value {
-					*BLUBB_SOLL += 0.0003 * (val - *BLUBB_SOLL).signum();
-					*BLUBB_SOLL = BLUBB_SOLL.clamp(0.0,1.0);
+						if let Some(value) = result.midi_send_value {
+							let midi_sender = &mut res.midi_sender;
+							res.midi.lock(|midi| midi_sender.send_midi_cc(i, value, midi));
+						}
+
+						if let Some(target) = result.fader_move_target {
+							faders[i].set_target(target);
+						}
+						else {
+							faders[i].clear_target();
+						}
+					}
+					FaderConfig::Continuous => {
+						let midi_sender = &mut res.midi_sender;
+						res.midi.lock(|midi| midi_sender.send_midi_cc(i, faders[i].value(), midi));
+						
+						if let Some(target) = fader_midi_commands[i] {
+							faders[i].set_target(target);
+						}
+					}
 				}
-				target_values[3] = result2.fader_move_target;
-				target_values[4] = Some(*BLUBB_SOLL);
 			}
-			_ => {}
 		}
 
 
-
+		// set fader values, handle movement and calibration
 		let mut active_faders = 0;
 		let mut n_active_faders = 0;
 		let fader_limit = match res.calibration_request.lock(|c|*c) {
@@ -497,20 +563,11 @@ const APP: () = {
 			_ => MAX_ACTIVE_FADERS_DURING_CALIBRATION
 		};
 		
-		for (i, ((target, fader), user_flag)) in
-			target_values.iter()
-			.zip(res.faders.iter_mut())
-			.zip(res.fader_processes_user_input.iter_mut())
+		for (i, (fader, processes_midi)) in
+			res.faders.iter_mut()
+			.zip(res.fader_processes_midi_command.iter_mut())
 			.enumerate()
 		{
-			if let Some(val) = *target {
-				fader.set_target(val);
-				*user_flag = true;
-			}
-			else {
-				fader.clear_target();
-			}
-
 			// set values received via MIDI and process fader movement / calibration
 			if n_active_faders < fader_limit
 			{
@@ -525,11 +582,13 @@ const APP: () = {
 			}
 			
 			if fader.target().is_none() {
-				*user_flag = false;
+				*processes_midi = false;
 			}
 		}
 		res.x3423.set_motor_enable(active_faders);
 
+
+		// handle pending calibration request or write finished calibration to flash
 		match res.calibration_request.lock(|c| *c)
 		{
 			Calib::Running => {
@@ -561,7 +620,7 @@ const APP: () = {
 		}
 	}
 
-	#[task(binds = USB_LP_CAN_RX0, resources=[midi, usb_dev, target_values, fader_steps, calibration_request], priority=2)]
+	#[task(binds = USB_LP_CAN_RX0, resources=[midi, usb_dev, fader_midi_commands, fader_config, calibration_request], priority=2)]
 	fn periodic_usb_poll(c : periodic_usb_poll::Context) {
 
 		c.resources.usb_dev.poll(&mut[c.resources.midi]);
@@ -579,11 +638,16 @@ const APP: () = {
 							let cc = message[2];
 							let value = message[3];
 							if (1..=17).contains(&cc) {
-								c.resources.target_values[(cc-1) as usize] = Some(value as f32 / 128.0);
+								c.resources.fader_midi_commands[(cc-1) as usize] = Some(value as f32 / 128.0);
 							}
 
 							if (71..87).contains(&cc) {
-								c.resources.fader_steps[(cc-71) as usize] = value;
+								c.resources.fader_config[(cc-71) as usize] =
+									match value {
+										0 => FaderConfig::Continuous,
+										127 => FaderConfig::Bidirectional,
+										steps => FaderConfig::Steps(steps)
+									};
 							}
 
 							if cc == 100 {

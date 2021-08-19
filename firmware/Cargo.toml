@@ -15,7 +15,8 @@ cortex-m-rtic = ">=0.5"
 stm32f1xx-hal = { features = ["rt", "stm32f103", "stm32-usbd", "medium"] }
 
 usb-device = { version = ">=0.2.1" }
-usbd-midi = { git = "https://github.com/btrepp/usbd-midi", rev = "34e355ab239e1f88bb7bbb52230e9cd716ddf9bc"}
+usbd-midi = { path = "/home/flo/rust/usbd-midi" }
+#usbd-midi = { git = "https://github.com/btrepp/usbd-midi", rev = "34e355ab239e1f88bb7bbb52230e9cd716ddf9bc"}
 
 micromath = "2.0.0"
 
