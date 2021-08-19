@@ -235,8 +235,9 @@ impl Fader {
 				let target_raw = (target * (self.write_high - self.write_low) as f32 + self.write_low as f32) as u16;
 
 				let error = target - self.last_value;
-				let limit = (1.0 - error.abs()/0.1).clamp(0.,1.);
-				self.integrator = (self.integrator + 0.2*error).clamp(-limit, limit);
+				//let limit = (1.0 - error.abs()/0.1).clamp(0.,1.);
+				let limit = 0.8;
+				self.integrator = (self.integrator + 1.0*error).clamp(-limit, limit);
 
 				if error > 0. {
 					self.integrator = self.integrator.max(0.0);
