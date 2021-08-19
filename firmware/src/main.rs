@@ -147,16 +147,17 @@ impl FaderStateMachine {
 	}
 	pub fn process(&mut self, setpoint: f32, measured: f32) -> FaderResult {
 		let JUMP_THRESHOLD = 3.0;
-		let SET_DEADZONE = 0.02;
+		let SET_DEADZONE = 0.01;
+		let SETPOINT_DEADZONE = 0.001;
 		let ESCAPE_LIMIT = 0.2;
-		let INPUT_DEADZONE = 0.02;
-		let CAPTURE_ZONE = 0.03;
+		let INPUT_DEADZONE = 0.05;
+		let CAPTURE_ZONE = 0.06;
 		let STABILIZE_TIMEOUT = 500;
 
 		self.measured_history.push(measured);
 		self.setpoint_history.push(setpoint);
 
-		if (setpoint - measured).abs() < SET_DEADZONE {
+		if (setpoint - measured).abs() < CAPTURE_ZONE {
 			self.stable_timer = self.stable_timer.saturating_add(1);
 		}
 		else {
@@ -164,7 +165,8 @@ impl FaderStateMachine {
 		}
 
 		let setpoint_diff = (self.old_setpoint - setpoint).abs();
-		if setpoint_diff >= SET_DEADZONE {
+		if setpoint_diff > SETPOINT_DEADZONE {
+			self.stable_timer = 0;
 			self.old_setpoint = setpoint;
 		}
 
@@ -173,15 +175,19 @@ impl FaderStateMachine {
 				if setpoint_diff >= JUMP_THRESHOLD {
 					self.state = FaderState::MidiControlledJump;
 				}
-				else if setpoint_diff >= SET_DEADZONE {
+				else if setpoint_diff > SETPOINT_DEADZONE {
 					self.state = FaderState::MidiControlledSlow;
 				}
 			
 				if (setpoint - measured).abs() >= ESCAPE_LIMIT {
 					self.state = FaderState::UserOverride;
+					self.measured_history.push(1.0);
+					self.measured_history.push(0.0);
 				}
 				else if (setpoint - measured).abs() >= INPUT_DEADZONE {
 					self.state = FaderState::UserControlled;
+					self.measured_history.push(1.0);
+					self.measured_history.push(0.0);
 				}
 				
 				FaderResult {
@@ -198,9 +204,13 @@ impl FaderStateMachine {
 				}
 				if (setpoint - measured).abs() >= ESCAPE_LIMIT {
 					self.state = FaderState::UserOverride;
+					self.measured_history.push(1.0);
+					self.measured_history.push(0.0);
 				}
-				else if (setpoint - measured).abs() >= INPUT_DEADZONE {
+				else if (setpoint - measured).abs() >= 3.*INPUT_DEADZONE {
 					self.state = FaderState::UserControlled;
+					self.measured_history.push(1.0);
+					self.measured_history.push(0.0);
 				}
 
 				FaderResult {
