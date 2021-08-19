@@ -68,7 +68,7 @@ pub enum Calib
 	Idle
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy)]
 pub enum FaderState {
 	Idle,
 	UserControlled,
@@ -116,7 +116,6 @@ pub struct FaderStateMachine {
 	stable_timer: u32,
 	measured_history: Queue,
 	setpoint_history: Queue,
-	state_inertia_counter: u32
 }
 
 pub struct FaderResult {
@@ -143,8 +142,7 @@ impl FaderStateMachine {
 			old_setpoint: 0.5,
 			stable_timer: 0,
 			measured_history: Queue::new(),
-			setpoint_history: Queue::new(),
-			state_inertia_counter: 0
+			setpoint_history: Queue::new()
 		}
 	}
 	pub fn process(&mut self, setpoint: f32, measured: f32) -> FaderResult {
@@ -155,7 +153,6 @@ impl FaderStateMachine {
 		let INPUT_DEADZONE = 0.05;
 		let CAPTURE_ZONE = 0.06;
 		let STABILIZE_TIMEOUT = 500;
-		let STATE_INERTIA = 300;
 
 		self.measured_history.push(measured);
 		self.setpoint_history.push(setpoint);
@@ -172,8 +169,8 @@ impl FaderStateMachine {
 			self.stable_timer = 0;
 			self.old_setpoint = setpoint;
 		}
-		//let old_state = self.state;
-		let result = match self.state {
+
+		match self.state {
 			FaderState::Idle => {
 				if setpoint_diff >= JUMP_THRESHOLD {
 					self.state = FaderState::MidiControlledJump;
@@ -276,17 +273,7 @@ impl FaderStateMachine {
 					midi_send_value: Some(measured)
 				}
 			}
-		};
-		/*if self.state != old_state {
-			if self.state_inertia_counter >= STATE_INERTIA {
-				self.state_inertia_counter = 0;
-			}
-			else {
-				self.state = old_state;
-				self.state_inertia_counter += 1;
-			}
-		}*/
-		return result;
+		}
 	}
 }
 
