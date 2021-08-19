@@ -644,6 +644,7 @@ const APP: () = {
 
 	#[task(binds = USB_LP_CAN_RX0, resources=[midi, usb_dev, fader_midi_commands, fader_config, calibration_request], priority=2)]
 	fn periodic_usb_poll(c : periodic_usb_poll::Context) {
+		static mut LSB: [u8; 17] = [0; 17];
 
 		c.resources.usb_dev.poll(&mut[c.resources.midi]);
 
@@ -660,7 +661,10 @@ const APP: () = {
 							let cc = message[2];
 							let value = message[3];
 							if (1..=17).contains(&cc) {
-								c.resources.fader_midi_commands[(cc-1) as usize] = Some(value as f32 / 128.0);
+								c.resources.fader_midi_commands[(cc-1) as usize] = Some( (((value as u16) << 7) + LSB[(cc-1) as usize] as u16) as f32 / 16384.0);
+							}
+							if (33..=49).contains(&cc) {
+								LSB[cc as usize - 33] = value;
 							}
 
 							if (71..87).contains(&cc) {
