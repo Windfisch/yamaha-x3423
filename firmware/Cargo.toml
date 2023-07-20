@@ -10,19 +10,22 @@ license = "GPL-3.0"
 [dependencies]
 embedded-hal = "0.2.3"
 cortex-m = "0.6.7"
-cortex-m-rt = ">=0.6"
-cortex-m-rtic = ">=0.5"
-stm32f1xx-hal = { features = ["rt", "stm32f103", "stm32-usbd", "medium"] }
+cortex-m-rt = "0.6"
+cortex-m-rtic = "0.5"
+stm32f1xx-hal = { version = "0.7", features = ["rt", "stm32f103", "stm32-usbd", "medium"] }
 
-usb-device = { version = ">=0.2.1" }
+usb-device = { version = "0.2.1" }
 usbd-midi = { path = "/home/flo/rust/usbd-midi" }
 #usbd-midi = { git = "https://github.com/btrepp/usbd-midi", rev = "34e355ab239e1f88bb7bbb52230e9cd716ddf9bc"}
 
 micromath = "2.0.0"
 
-#shared-bus = ">=0.1.4"
+ssd1306 = "0.7.1"
+
+#shared-bus = "0.2.4"
+shared-bus-rtic = "0.2.2"
 #noop-bus-mutex = { git="https://github.com/Windfisch/noop-bus-mutex" }
-mcp49xx = ">=0.1.0"
+mcp49xx = "0.1.0"
 
 [profile.dev]
 opt-level = 0

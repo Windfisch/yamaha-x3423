@@ -23,6 +23,8 @@ use mcp49xx::marker::DualChannel;
 use mcp49xx::marker::Unbuffered;
 use stm32f1xx_hal::time::Hertz;
 
+use shared_bus_rtic::SharedBus;
+
 use usb_device::prelude::*;
 
 use micromath::F32Ext;
@@ -339,6 +341,8 @@ pub enum FaderConfig {
 	Bidirectional,
 }
 
+type SpiType = spi::Spi<stm32f1xx_hal::pac::SPI2, spi::Spi2NoRemap, (PB13<Alternate<PushPull>>, spi::NoMiso, PB15<Alternate<PushPull>>), u8>;
+
 #[app(device = stm32f1xx_hal::pac, peripherals = true)]
 const APP: () = {
 	struct Resources {
@@ -349,9 +353,11 @@ const APP: () = {
 
 		usb_dev: UsbDevice<'static, UsbBusType>,
 		midi: usbd_midi::midi_device::MidiClass<'static, UsbBus<Peripheral>>,
-		dac: Mcp49xx<SpiInterface<spi::Spi<stm32f1xx_hal::pac::SPI2, spi::Spi2NoRemap, (PB13<Alternate<PushPull>>, spi::NoMiso, PB15<Alternate<PushPull>>), u8>, OldOutputPin<PC15<Output<PushPull>>>>, Resolution12Bit, DualChannel, Unbuffered>,
+		dac: Mcp49xx<SpiInterface<SharedBus<SpiType>, OldOutputPin<PC15<Output<PushPull>>>>, Resolution12Bit, DualChannel, Unbuffered>,
 
 		x3423: X3423,
+
+		display: ssd1306::Ssd1306<ssd1306::prelude::SPIInterfaceNoCS<SharedBus<SpiType>, PB5<Output<PushPull>>>, ssd1306::size::DisplaySize128x64, ssd1306::mode::BufferedGraphicsMode<ssd1306::size::DisplaySize128x64>>,
 
 		faders: [Fader; 17],
 		fader_config: [FaderConfig; 17],
@@ -363,7 +369,9 @@ const APP: () = {
 
 		midi_sender: MidiSender,
 		fader_bidir: [FaderStateMachine; 17],
-		fader_bidir_target: [SlewTarget; 17]
+		fader_bidir_target: [SlewTarget; 17],
+
+		cs8: PC14<Output<PushPull>>,
 	}
 
 	#[init]
@@ -428,10 +436,26 @@ const APP: () = {
 		// Configure SPI
 		let mosi = gpiob.pb15.into_alternate_push_pull(&mut gpiob.crh);
 		let sck = gpiob.pb13.into_alternate_push_pull(&mut gpiob.crh);
-		let dac_cs: OldOutputPin<_> = gpioc.pc15.into_push_pull_output_with_state(&mut gpioc.crh, State::High).into();
+		let spi: SpiType = spi::Spi::spi2(device.SPI2, (sck, spi::NoMiso, mosi), spi::Mode { phase : spi::Phase::CaptureOnFirstTransition, polarity : spi::Polarity::IdleLow }, 100.khz(), clocks, &mut rcc.apb1);
 
-		let spi = spi::Spi::spi2(device.SPI2, (sck, spi::NoMiso, mosi), spi::Mode { phase : spi::Phase::CaptureOnFirstTransition, polarity : spi::Polarity::IdleLow }, 5.mhz(), clocks, &mut rcc.apb1);
-		let dac = mcp49xx::Mcp49xx::new_mcp4822(spi, dac_cs);
+		let shared_spi = shared_bus_rtic::new!(spi, SpiType);
+
+
+		let display_dc = gpiob.pb5.into_push_pull_output(&mut gpiob.crl);
+		let mut display = ssd1306::Ssd1306::new(
+			ssd1306::prelude::SPIInterfaceNoCS::new(shared_spi.acquire(), display_dc),
+			ssd1306::size::DisplaySize128x64,
+			ssd1306::rotation::DisplayRotation::Rotate0
+		).into_buffered_graphics_mode();
+		use ssd1306::mode::DisplayConfig;
+	
+		let mut cs8 = gpioc.pc14.into_push_pull_output(&mut gpioc.crh);
+		cs8.set_low().ok();
+		display.init().unwrap();
+		cs8.set_high().ok();
+
+		let dac_cs: OldOutputPin<_> = gpioc.pc15.into_push_pull_output_with_state(&mut gpioc.crh, State::High).into();
+		let dac = mcp49xx::Mcp49xx::new_mcp4822(shared_spi.acquire(), dac_cs);
 
 		let adc = stm32f1xx_hal::adc::Adc::adc1(device.ADC1, &mut rcc.apb2, clocks);
 
@@ -478,7 +502,9 @@ const APP: () = {
 			calibration_request: Calib::Idle,
 			midi_sender: MidiSender::new(),
 			fader_bidir: [FaderStateMachine::new(); 17],
-			fader_bidir_target: [SlewTarget::new(); 17]
+			fader_bidir_target: [SlewTarget::new(); 17],
+			cs8,
+			display
 		};
 
 		
@@ -496,16 +522,27 @@ const APP: () = {
 	}
 
 	
-	#[task(binds = TIM2, resources = [x3423, dac, delay, faders, fader_midi_commands, mytimer, led, midi, fader_config, fader_processes_midi_command, calibration_request, flash, midi_sender, fader_bidir, fader_bidir_target], priority=1)]
+	#[task(binds = TIM2, resources = [x3423, dac, display, delay, faders, fader_midi_commands, mytimer, led, midi, fader_config, fader_processes_midi_command, calibration_request, flash, midi_sender, fader_bidir, fader_bidir_target, cs8], priority=1)]
 	fn xmain(mut c : xmain::Context) {
 		static mut BLINK: u64 = 0;
 
 		let res = &mut c.resources;
 		res.mytimer.clear_update_interrupt_flag();
 		
+		res.cs8.set_high().ok();
 		*BLINK += 1;
 		if (*BLINK) % 100 == 0 {
 			res.led.toggle().unwrap();
+
+			res.cs8.set_low().ok();
+			
+			for i in 0..16 {
+				res.display.set_pixel(i, i, true);
+			}
+			res.display.flush().ok();
+			res.display.set_display_on(true);
+
+			res.cs8.set_high().ok();
 		}
 
 		let calibration_state = res.calibration_request.lock(|c|*c);
@@ -520,6 +557,7 @@ const APP: () = {
 		let faders = &mut res.faders;
 		res.x3423.read_values(|idx, value| { faders[idx].update_value(value) }, res.delay);
 
+/*
 		// do all the fader processing
 		if calibration_state == Calib::Idle {
 			let faders = &mut res.faders;
@@ -575,7 +613,6 @@ const APP: () = {
 				}
 			}
 		}
-
 
 		// set fader values, handle movement and calibration
 		let mut active_faders = 0;
@@ -640,6 +677,7 @@ const APP: () = {
 			}
 			Calib::Idle => {}
 		}
+		*/
 	}
 
 	#[task(binds = USB_LP_CAN_RX0, resources=[midi, usb_dev, fader_midi_commands, fader_config, calibration_request], priority=2)]
