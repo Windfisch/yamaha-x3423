@@ -20,12 +20,13 @@ usbd-midi = { path = "/home/flo/rust/usbd-midi" }
 
 micromath = "2.0.0"
 
-ssd1306 = "0.7.1"
+ssd1306 = "0.8"
 
 #shared-bus = "0.2.4"
 shared-bus-rtic = "0.2.2"
 #noop-bus-mutex = { git="https://github.com/Windfisch/noop-bus-mutex" }
 mcp49xx = "0.1.0"
+embedded-graphics = "0.8"
 
 [profile.dev]
 opt-level = 0

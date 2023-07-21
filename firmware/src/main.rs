@@ -436,7 +436,7 @@ const APP: () = {
 		// Configure SPI
 		let mosi = gpiob.pb15.into_alternate_push_pull(&mut gpiob.crh);
 		let sck = gpiob.pb13.into_alternate_push_pull(&mut gpiob.crh);
-		let spi: SpiType = spi::Spi::spi2(device.SPI2, (sck, spi::NoMiso, mosi), spi::Mode { phase : spi::Phase::CaptureOnFirstTransition, polarity : spi::Polarity::IdleLow }, 100.khz(), clocks, &mut rcc.apb1);
+		let spi: SpiType = spi::Spi::spi2(device.SPI2, (sck, spi::NoMiso, mosi), spi::Mode { phase : spi::Phase::CaptureOnFirstTransition, polarity : spi::Polarity::IdleLow }, 10.mhz(), clocks, &mut rcc.apb1);
 
 		let shared_spi = shared_bus_rtic::new!(spi, SpiType);
 
@@ -525,24 +525,41 @@ const APP: () = {
 	#[task(binds = TIM2, resources = [x3423, dac, display, delay, faders, fader_midi_commands, mytimer, led, midi, fader_config, fader_processes_midi_command, calibration_request, flash, midi_sender, fader_bidir, fader_bidir_target, cs8], priority=1)]
 	fn xmain(mut c : xmain::Context) {
 		static mut BLINK: u64 = 0;
+		static mut FOO: i32 = 0;
+
+		use embedded_graphics::{
+			pixelcolor::BinaryColor,
+			mono_font::{ascii::FONT_6X10, MonoTextStyle},
+			prelude::*,
+			primitives::{Circle, PrimitiveStyleBuilder, Rectangle, Triangle},
+			text::Text,
+		};
 
 		let res = &mut c.resources;
 		res.mytimer.clear_update_interrupt_flag();
 		
 		res.cs8.set_high().ok();
 		*BLINK += 1;
-		if (*BLINK) % 100 == 0 {
+		if *BLINK % 100 == 0 {
+			*FOO = (*FOO + 1) % 20;
 			res.led.toggle().unwrap();
 
-			res.cs8.set_low().ok();
+			res.display.clear(BinaryColor::Off);
+
 			
-			for i in 0..16 {
+			let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+			Text::new("Hello Rust!", Point::new(20+*FOO, 30), style).draw(res.display).unwrap();
+
+			for i in 0..15 {
 				res.display.set_pixel(i, i, true);
 			}
-			res.display.flush().ok();
-			res.display.set_display_on(true);
 
+			res.display.set_draw_area((10,10),(128,64));
+
+			res.cs8.set_low().ok();
+			res.display.flush().ok();
 			res.cs8.set_high().ok();
+
 		}
 
 		let calibration_state = res.calibration_request.lock(|c|*c);

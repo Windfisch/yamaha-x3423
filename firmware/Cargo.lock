@@ -191,10 +191,23 @@ dependencies = [
 ]
 
 [[package]]
-name = "embedded-graphics-core"
-version = "0.3.3"
+name = "embedded-graphics"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8b1239db5f3eeb7e33e35bd10bd014e7b2537b17e071f726a09351431337cfa"
+checksum = "cd2a8e0250a7e1212828166b01eed0219e488ebb2599f44624a29c9bd249f397"
+dependencies = [
+ "az",
+ "byteorder",
+ "embedded-graphics-core",
+ "float-cmp",
+ "micromath",
+]
+
+[[package]]
+name = "embedded-graphics-core"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba9ecd261f991856250d2207f6d8376946cd9f412a2165d3b75bc87a0bc7a044"
 dependencies = [
  "az",
  "byteorder",
@@ -208,6 +221,15 @@ checksum = "db184d3fa27bc7a2344250394c0264144dfe0bc81a4401801dcb964b8dd172ad"
 dependencies = [
  "nb 0.1.3",
  "void",
+]
+
+[[package]]
+name = "float-cmp"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "98de4bbd547a563b716d8dfa9aad1cb19bfab00f4fa09a6a4ed21dbcf44ce9c4"
+dependencies = [
+ "num-traits",
 ]
 
 [[package]]
@@ -304,6 +326,15 @@ name = "nb"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "546c37ac5d9e56f55e73b677106873d9d9f5190605e41a856503623648488cae"
+
+[[package]]
+name = "num-traits"
+version = "0.2.16"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f30b0abd723be7e2ffca1272140fac1a2f084c77ec3e123c192b66af1ee9e6c2"
+dependencies = [
+ "autocfg",
+]
 
 [[package]]
 name = "num_enum"
@@ -418,9 +449,9 @@ dependencies = [
 
 [[package]]
 name = "ssd1306"
-version = "0.7.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f066d5458b0a27d938dd2b71a8b397d88c5776cb316b8a39f19ef49b6d290709"
+checksum = "e1eaea5daefc39bfa675e4e75e484af7e54628ffe4fc5300e52bde5905f6b677"
 dependencies = [
  "display-interface",
  "display-interface-i2c",
@@ -548,6 +579,7 @@ dependencies = [
  "cortex-m 0.6.7",
  "cortex-m-rt",
  "cortex-m-rtic",
+ "embedded-graphics",
  "embedded-hal",
  "mcp49xx",
  "micromath",
