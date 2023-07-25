@@ -9,7 +9,7 @@ use fader::Fader;
 use embedded_hal::digital::v2::OutputPin;
 use embedded_hal::digital::v1_compat::OldOutputPin;
 use rtic::app;
-use stm32f1xx_hal::gpio::{gpiob::*, gpioc::*, Input, Floating, Alternate, Output, PushPull, State};
+use stm32f1xx_hal::gpio::{gpioa::*, gpiob::*, gpioc::*, Input, Floating, Alternate, Output, PushPull, State};
 use stm32f1xx_hal::spi;
 use stm32f1xx_hal::timer;
 use stm32f1xx_hal::prelude::*;
@@ -76,15 +76,15 @@ mod panic_mutex {
 		}
 	}
 
-	/// Creates a static variable initialized with the specified expression and returns a `&'static` reference to it.
+	/// Creates a static variable of type PanicMutex<$T> initialized with the specified expression and returns a `&'static` reference to it.
 	#[macro_export]
 	macro_rules! new {
 		($expr:expr; $T:ty) => {
 			{
 				let thing = $expr;
 				unsafe {
-					static mut _MANAGER: core::mem::MaybeUninit<$T> = core::mem::MaybeUninit::uninit();
-					_MANAGER = core::mem::MaybeUninit::new(thing);
+					static mut _MANAGER: core::mem::MaybeUninit<panic_mutex::PanicMutex<$T>> = core::mem::MaybeUninit::uninit();
+					_MANAGER = core::mem::MaybeUninit::new(panic_mutex::PanicMutex::new(thing));
 					&*_MANAGER.as_ptr()
 				}
 			}
@@ -212,7 +212,7 @@ mod shift_register {
 	use super::panic_mutex::PanicMutex;
 	use embedded_hal::digital::v2::OutputPin;
 
-	struct ShiftRegister<LATCH: OutputPin, CLOCK: OutputPin, DATA: OutputPin> {
+	pub struct ShiftRegister<LATCH: OutputPin, CLOCK: OutputPin, DATA: OutputPin> {
 		latch: LATCH,
 		clock: CLOCK,
 		data: DATA,
@@ -221,7 +221,9 @@ mod shift_register {
 
 	impl<LATCH: OutputPin, CLOCK: OutputPin, DATA: OutputPin> ShiftRegister<LATCH, CLOCK, DATA> {
 		pub fn new(latch: LATCH, clock: CLOCK, data: DATA, value: u8) -> Self {
-			Self { latch, clock, data, value }
+			let mut result = Self { latch, clock, data, value };
+			result.send();
+			result
 		}
 
 		pub fn split(this: &PanicMutex<Self>) -> [Pin<LATCH, CLOCK, DATA>; 8] {
@@ -269,7 +271,7 @@ mod shift_register {
 		}
 	}
 
-	struct Pin<'a, LATCH: OutputPin, CLOCK: OutputPin, DATA: OutputPin> {
+	pub struct Pin<'a, LATCH: OutputPin, CLOCK: OutputPin, DATA: OutputPin> {
 		shift_register: &'a PanicMutex<ShiftRegister<LATCH, CLOCK, DATA>>,
 		index: u8,
 	}
@@ -695,6 +697,17 @@ const APP: () = {
 			.serial_number("000000")
 			.device_class(usbd_midi::data::usb::constants::USB_CLASS_NONE)
 			.build();
+
+
+		// Configure shift register
+		let mut shiftreg_pins = {
+			let shiftreg_data = gpioa.pa1.into_push_pull_output(&mut gpioa.crl);
+			let shiftreg_clock = gpioa.pa0.into_push_pull_output(&mut gpioa.crl); // on black pill, this is pb10
+			let shiftreg_latch = gpiob.pb14.into_push_pull_output(&mut gpiob.crh);
+			let shift_register = shift_register::ShiftRegister::new(shiftreg_latch, shiftreg_clock, shiftreg_data, 0xFF);
+			type ShiftRegisterType = shift_register::ShiftRegister<PB14<Output<PushPull>>, PA0<Output<PushPull>>, PA1<Output<PushPull>>>;
+			shift_register::ShiftRegister::split(panic_mutex::new!(shift_register; ShiftRegisterType))
+		};
 
 		// Configure SPI
 		let mosi = gpiob.pb15.into_alternate_push_pull(&mut gpiob.crh);
