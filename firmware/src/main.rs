@@ -29,6 +29,269 @@ use usb_device::prelude::*;
 
 use micromath::F32Ext;
 
+mod panic_mutex {
+	use core::sync::atomic::{AtomicBool, Ordering};
+
+	/// Ensures mutually exclusive access to the contained `T`. This mutex
+	/// implementation does *not* attempt to block / serialize concurrent
+	/// data access. Rather, if concurrent locking is attempted, it panics.
+	pub struct PanicMutex<T> {
+		inner: core::cell::UnsafeCell<T>,
+		busy: AtomicBool,
+	}
+
+	/// RAII-guard for [`PanicMutex`]. When this object is dropped, the mutex
+	/// is unlocked.
+	///
+	/// Access to the protected data is possible via its [`Deref`] and [`DerefMut`]
+	/// implementations.
+	pub struct PanicMutexGuard<'a, T: 'a> {
+		parent: &'a PanicMutex<T>,
+	}
+
+	impl<T> PanicMutex<T> {
+		/// Constructs a new, unlocked `PanicMutex`.
+		pub fn new(inner: T) -> Self {
+			PanicMutex {
+				inner: core::cell::UnsafeCell::new(inner),
+				busy: AtomicBool::from(false),
+			}
+		}
+
+		/// Locks the mutex and returns a `PanicMutexGuard` through which the data
+		/// can be accessed. The mutex stays locked for the guard's lifetime.
+		///
+		/// Panics if the lock is already held by another guard.
+		pub fn lock(&self) -> PanicMutexGuard<'_, T> {
+			PanicMutexGuard::new(self)
+		}
+
+		/// Locks the mutex, applies the `f` function to its data, unlocks and
+		/// returns the result of `f`.
+		///
+		/// Panics if the lock is already held.
+		pub fn with_lock<R, F: FnOnce(&mut T) -> R>(&self, f: F) -> R {
+			use core::ops::DerefMut;
+			f(self.lock().deref_mut())
+		}
+	}
+
+	/// Creates a static variable initialized with the specified expression and returns a `&'static` reference to it.
+	#[macro_export]
+	macro_rules! new {
+		($expr:expr; $T:ty) => {
+			{
+				let thing = $expr;
+				unsafe {
+					static mut _MANAGER: core::mem::MaybeUninit<$T> = core::mem::MaybeUninit::uninit();
+					_MANAGER = core::mem::MaybeUninit::new(thing);
+					&*_MANAGER.as_ptr()
+				}
+			}
+		};
+	}
+	pub use new;
+
+	impl<'a, T: 'a> PanicMutexGuard<'a, T> {
+		// SAFETY: This is the only constructor and thus ensures that only one guard
+		// can exist for a given PanicMutex.
+		fn new(parent: &'a PanicMutex<T>) -> Self {
+			if
+				atomic::compare_exchange(&parent.busy, false, true, Ordering::SeqCst, Ordering::SeqCst)
+					.is_err() {
+				panic!("PanicMutex conflict");
+			}
+
+			Self {
+				parent
+			}
+		}
+	}
+
+	impl<'a, T: 'a> core::ops::Deref for PanicMutexGuard<'a, T> {
+		type Target = T;
+
+		fn deref<'b>(&'b self) -> &'b T {
+			// SAFETY: Only one guard can exist. Its only constructor (new) ensures this.
+			unsafe { & *self.parent.inner.get() }
+		}
+	}
+
+	impl<'a, T: 'a> core::ops::DerefMut for PanicMutexGuard<'a, T> {
+		fn deref_mut<'b>(&'b mut self) -> &'b mut T {
+			// SAFETY: Only one guard can exist. Its only constructor (new) ensures this.
+			unsafe { &mut *self.parent.inner.get() }
+		}
+	}
+
+	impl<'a, T: 'a> core::ops::Drop for PanicMutexGuard<'a, T> {
+		fn drop(&mut self) {
+			self.parent.busy.store(false, Ordering::SeqCst);
+		}
+	}
+
+	unsafe impl<T: Send> Sync for PanicMutex<T> {}
+	unsafe impl<T: Send> Send for PanicMutex<T> {}
+
+	#[cfg(not(any( target_has_atomic = "8", feature = "cortex-m")))]
+	core::compile_error!("Your architecture does not support atomic operations.");
+	
+	#[cfg(all( not(target_has_atomic = "8"), feature = "cortex-m"))]
+	mod atomic {
+		use core::sync::atomic::{AtomicBool, Ordering};
+
+		#[inline(always)]
+		pub fn compare_exchange(
+			atomic: &AtomicBool,
+			current: bool,
+			new: bool,
+			_success: Ordering,
+			_failure: Ordering,
+		) -> Result<bool, bool> {
+			cortex_m::interrupt::free(|_cs| {
+				let prev = atomic.load(Ordering::Acquire);
+				if prev == current {
+					atomic.store(new, Ordering::Release);
+					Ok(prev)
+				} else {
+					Err(false)
+				}
+			})
+		}
+	}
+
+	#[cfg(target_has_atomic = "8")]
+	mod atomic {
+		use core::sync::atomic::{AtomicBool, Ordering};
+
+		#[inline(always)]
+		pub fn compare_exchange(
+			atomic: &AtomicBool,
+			current: bool,
+			new: bool,
+			success: Ordering,
+			failure: Ordering,
+		) -> Result<bool, bool> {
+			atomic.compare_exchange(current, new, success, failure)
+		}
+	}
+}
+
+mod shared_spi {
+	use super::panic_mutex::PanicMutex;
+	use embedded_hal::blocking::spi::Write;
+
+	struct SharedSpi<BUS: 'static>(&'static PanicMutex<BUS>);
+
+	impl<BUS: Write<u8>> Write<u8> for SharedSpi<BUS> {
+		type Error = BUS::Error;
+		fn write(&mut self, data: &[u8]) -> Result<(), Self::Error> {
+			self.0.lock().write(data)
+		}
+	}
+}
+
+mod shared_gpio {
+	use super::panic_mutex::PanicMutex;
+	use embedded_hal::digital::v2::OutputPin;
+
+	struct SharedGpio<GPIO: 'static>(&'static PanicMutex<GPIO>);
+
+	impl<GPIO: OutputPin> OutputPin for SharedGpio<GPIO> {
+		type Error = GPIO::Error;
+		fn set_low(&mut self) -> Result<(), Self::Error> {
+			self.0.lock().set_low()
+		}
+		fn set_high(&mut self) -> Result<(), Self::Error> {
+			self.0.lock().set_high()
+		}
+	}
+}
+
+mod shift_register {
+	use super::panic_mutex::PanicMutex;
+	use embedded_hal::digital::v2::OutputPin;
+
+	struct ShiftRegister<LATCH: OutputPin, CLOCK: OutputPin, DATA: OutputPin> {
+		latch: LATCH,
+		clock: CLOCK,
+		data: DATA,
+		value: u8
+	}
+
+	impl<LATCH: OutputPin, CLOCK: OutputPin, DATA: OutputPin> ShiftRegister<LATCH, CLOCK, DATA> {
+		pub fn new(latch: LATCH, clock: CLOCK, data: DATA, value: u8) -> Self {
+			Self { latch, clock, data, value }
+		}
+
+		pub fn split(this: &PanicMutex<Self>) -> [Pin<LATCH, CLOCK, DATA>; 8] {
+			[
+				Pin::new(this, 0),
+				Pin::new(this, 1),
+				Pin::new(this, 2),
+				Pin::new(this, 3),
+				Pin::new(this, 4),
+				Pin::new(this, 5),
+				Pin::new(this, 6),
+				Pin::new(this, 7),
+			]
+		}
+
+		fn set_pin(&mut self, pin: u8, value: bool) {
+			if value {
+				self.value = self.value | (1 << pin);
+			}
+			else {
+				self.value = self.value & !(1 << pin);
+			}
+			self.send();
+		}
+
+		fn send(&mut self) {
+			self.latch.set_low();
+			for i in 0..8 {
+				self.send_bit(self.value & (1<<i) != 0);
+			}
+			self.latch.set_high();
+			Self::delay();
+		}
+
+		fn send_bit(&mut self, bit: bool) {
+			if bit { self.data.set_high(); } else { self.data.set_low(); }
+			self.clock.set_low();
+			Self::delay();
+			self.clock.set_high();
+			Self::delay();
+		}
+
+		fn delay() {
+			cortex_m::asm::delay(3);
+		}
+	}
+
+	struct Pin<'a, LATCH: OutputPin, CLOCK: OutputPin, DATA: OutputPin> {
+		shift_register: &'a PanicMutex<ShiftRegister<LATCH, CLOCK, DATA>>,
+		index: u8,
+	}
+
+	impl<'a, LATCH: OutputPin, CLOCK: OutputPin, DATA: OutputPin> Pin<'a, LATCH, CLOCK, DATA> {
+		pub fn new(shift_register: &'a PanicMutex<ShiftRegister<LATCH, CLOCK, DATA>>, index: u8) -> Self {
+			Self { shift_register, index }
+		}
+	}
+
+	impl<'a, LATCH: OutputPin, CLOCK: OutputPin, DATA: OutputPin> OutputPin for Pin<'a, LATCH, CLOCK, DATA> {
+		type Error = ();
+		fn set_low(&mut self) -> Result<(), ()> {
+			self.shift_register.lock().set_pin(self.index, false);
+			Ok(())
+		}
+		fn set_high(&mut self) -> Result<(), ()> {
+			self.shift_register.lock().set_pin(self.index, true);
+			Ok(())
+		}
+	}
+}
 
 const BASE_CURRENT: f32 = 0.3; // Ampere
 const FADER_CURRENT: f32 = 0.25; // Ampere. Note: this is only for slow movement and stall. Large jumps draw more current!
