@@ -1,6 +1,8 @@
 #![no_main]
 #![no_std]
 
+use core::convert::Infallible;
+
 mod x3423;
 mod fader;
 use x3423::X3423;
@@ -28,6 +30,18 @@ use shared_bus_rtic::SharedBus;
 use usb_device::prelude::*;
 
 use micromath::F32Ext;
+
+pub struct RefMutOutputPin<'a, T: OutputPin + ?Sized>(pub &'a mut T);
+
+impl<'a, T: OutputPin + ?Sized> OutputPin for RefMutOutputPin<'a, T> {
+	type Error = T::Error;
+	fn set_low(&mut self) -> Result<(), Self::Error> {
+		self.0.set_low()
+	}
+	fn set_high(&mut self) -> Result<(), Self::Error> {
+		self.0.set_high()
+	}
+}
 
 mod panic_mutex {
 	use core::sync::atomic::{AtomicBool, Ordering};
@@ -77,6 +91,7 @@ mod panic_mutex {
 	}
 
 	/// Creates a static variable of type PanicMutex<$T> initialized with the specified expression and returns a `&'static` reference to it.
+	// FIXME this is unsafe iirc. use cortex_m::singleton instead
 	#[macro_export]
 	macro_rules! new {
 		($expr:expr; $T:ty) => {
@@ -177,11 +192,11 @@ mod panic_mutex {
 	}
 }
 
-mod shared_spi {
+mod shared_spi { 
 	use super::panic_mutex::PanicMutex;
 	use embedded_hal::blocking::spi::Write;
 
-	struct SharedSpi<BUS: 'static>(&'static PanicMutex<BUS>);
+	pub struct SharedSpi<BUS: 'static>(pub &'static PanicMutex<BUS>);
 
 	impl<BUS: Write<u8>> Write<u8> for SharedSpi<BUS> {
 		type Error = BUS::Error;
@@ -195,7 +210,7 @@ mod shared_gpio {
 	use super::panic_mutex::PanicMutex;
 	use embedded_hal::digital::v2::OutputPin;
 
-	struct SharedGpio<GPIO: 'static>(&'static PanicMutex<GPIO>);
+	pub struct SharedGpio<GPIO: 'static>(pub &'static PanicMutex<GPIO>);
 
 	impl<GPIO: OutputPin> OutputPin for SharedGpio<GPIO> {
 		type Error = GPIO::Error;
@@ -283,12 +298,12 @@ mod shift_register {
 	}
 
 	impl<'a, LATCH: OutputPin, CLOCK: OutputPin, DATA: OutputPin> OutputPin for Pin<'a, LATCH, CLOCK, DATA> {
-		type Error = ();
-		fn set_low(&mut self) -> Result<(), ()> {
+		type Error = core::convert::Infallible;
+		fn set_low(&mut self) -> Result<(), Self::Error> {
 			self.shift_register.lock().set_pin(self.index, false);
 			Ok(())
 		}
-		fn set_high(&mut self) -> Result<(), ()> {
+		fn set_high(&mut self) -> Result<(), Self::Error> {
 			self.shift_register.lock().set_pin(self.index, true);
 			Ok(())
 		}
@@ -326,6 +341,13 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
 		cortex_m::asm::delay(10000000);
 	}
 }
+
+
+
+type ShiftRegisterType = shift_register::ShiftRegister<PB14<Output<PushPull>>, PA0<Output<PushPull>>, PA1<Output<PushPull>>>;
+type ShiftRegisterPin = shift_register::Pin<'static, PB14<Output<PushPull>>, PA0<Output<PushPull>>, PA1<Output<PushPull>>>;
+
+
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Calib
@@ -622,7 +644,15 @@ const APP: () = {
 
 		x3423: X3423,
 
-		display: ssd1306::Ssd1306<ssd1306::prelude::SPIInterfaceNoCS<SharedBus<SpiType>, PB5<Output<PushPull>>>, ssd1306::size::DisplaySize128x64, ssd1306::mode::BufferedGraphicsMode<ssd1306::size::DisplaySize128x64>>,
+		display: ssd1306::Ssd1306<
+			ssd1306::prelude::SPIInterface<
+				SharedBus<SpiType>,
+				shared_gpio::SharedGpio<PB5<Output<PushPull>>>,
+				RefMutOutputPin<'static, dyn embedded_hal::digital::v2::OutputPin<Error = Infallible> + Send>
+			>,
+			ssd1306::size::DisplaySize128x64,
+			ssd1306::mode::BufferedGraphicsMode<ssd1306::size::DisplaySize128x64>
+		>,
 
 		faders: [Fader; 17],
 		fader_config: [FaderConfig; 17],
@@ -635,8 +665,6 @@ const APP: () = {
 		midi_sender: MidiSender,
 		fader_bidir: [FaderStateMachine; 17],
 		fader_bidir_target: [SlewTarget; 17],
-
-		cs8: PC14<Output<PushPull>>,
 	}
 
 	#[init]
@@ -699,16 +727,6 @@ const APP: () = {
 			.build();
 
 
-		// Configure shift register
-		let mut shiftreg_pins = {
-			let shiftreg_data = gpioa.pa1.into_push_pull_output(&mut gpioa.crl);
-			let shiftreg_clock = gpioa.pa0.into_push_pull_output(&mut gpioa.crl); // on black pill, this is pb10
-			let shiftreg_latch = gpiob.pb14.into_push_pull_output(&mut gpiob.crh);
-			let shift_register = shift_register::ShiftRegister::new(shiftreg_latch, shiftreg_clock, shiftreg_data, 0xFF);
-			type ShiftRegisterType = shift_register::ShiftRegister<PB14<Output<PushPull>>, PA0<Output<PushPull>>, PA1<Output<PushPull>>>;
-			shift_register::ShiftRegister::split(panic_mutex::new!(shift_register; ShiftRegisterType))
-		};
-
 		// Configure SPI
 		let mosi = gpiob.pb15.into_alternate_push_pull(&mut gpiob.crh);
 		let sck = gpiob.pb13.into_alternate_push_pull(&mut gpiob.crh);
@@ -717,18 +735,48 @@ const APP: () = {
 		let shared_spi = shared_bus_rtic::new!(spi, SpiType);
 
 
-		let display_dc = gpiob.pb5.into_push_pull_output(&mut gpiob.crl);
-		let mut display = ssd1306::Ssd1306::new(
-			ssd1306::prelude::SPIInterfaceNoCS::new(shared_spi.acquire(), display_dc),
-			ssd1306::size::DisplaySize128x64,
-			ssd1306::rotation::DisplayRotation::Rotate0
-		).into_buffered_graphics_mode();
-		use ssd1306::mode::DisplayConfig;
+		// Configure display
+		let chip_selects = {
+			// Configure shift register
+			let shiftreg_data = gpioa.pa1.into_push_pull_output(&mut gpioa.crl);
+			let shiftreg_clock = gpioa.pa0.into_push_pull_output(&mut gpioa.crl); // on black pill, this is pb10
+			let shiftreg_latch = gpiob.pb14.into_push_pull_output(&mut gpiob.crh);
+			let shift_register = shift_register::ShiftRegister::new(shiftreg_latch, shiftreg_clock, shiftreg_data, 0xFF);
+			let cs_0to7 = cortex_m::singleton!(: [ShiftRegisterPin; 8] = {
+				shift_register::ShiftRegister::split(panic_mutex::new!(shift_register; ShiftRegisterType))
+			}).unwrap();
+		
+			// Configure the 9th chip select pin
+			let pc14 = gpioc.pc14.into_push_pull_output(&mut gpioc.crh);
+			let cs8 = cortex_m::singleton!(: PC14<Output<PushPull>> = pc14).unwrap();
+
+			let mut iter = cs_0to7.iter_mut();
+
+			let chip_selects: [&mut (dyn OutputPin<Error = Infallible> + Send); 9] = [
+				iter.next().unwrap(),
+				iter.next().unwrap(),
+				iter.next().unwrap(),
+				iter.next().unwrap(),
+				iter.next().unwrap(),
+				iter.next().unwrap(),
+				iter.next().unwrap(),
+				iter.next().unwrap(),
+				cs8
+			];
+			chip_selects
+		};
+
+
+			let display_dc = shared_gpio::SharedGpio(panic_mutex::new!(gpiob.pb5.into_push_pull_output(&mut gpiob.crl); PB5<Output<PushPull>>));
+			let mut display = ssd1306::Ssd1306::new(
+				ssd1306::prelude::SPIInterface::new(shared_spi.acquire(), display_dc, RefMutOutputPin(chip_selects[8])),
+				ssd1306::size::DisplaySize128x64,
+				ssd1306::rotation::DisplayRotation::Rotate0
+			).into_buffered_graphics_mode();
+			use ssd1306::mode::DisplayConfig;
 	
-		let mut cs8 = gpioc.pc14.into_push_pull_output(&mut gpioc.crh);
-		cs8.set_low().ok();
-		display.init().unwrap();
-		cs8.set_high().ok();
+			display.init().unwrap();
+		//}
 
 		let dac_cs: OldOutputPin<_> = gpioc.pc15.into_push_pull_output_with_state(&mut gpioc.crh, State::High).into();
 		let dac = mcp49xx::Mcp49xx::new_mcp4822(shared_spi.acquire(), dac_cs);
@@ -779,7 +827,6 @@ const APP: () = {
 			midi_sender: MidiSender::new(),
 			fader_bidir: [FaderStateMachine::new(); 17],
 			fader_bidir_target: [SlewTarget::new(); 17],
-			cs8,
 			display
 		};
 
@@ -798,7 +845,7 @@ const APP: () = {
 	}
 
 	
-	#[task(binds = TIM2, resources = [x3423, dac, display, delay, faders, fader_midi_commands, mytimer, led, midi, fader_config, fader_processes_midi_command, calibration_request, flash, midi_sender, fader_bidir, fader_bidir_target, cs8], priority=1)]
+	#[task(binds = TIM2, resources = [x3423, dac, display, delay, faders, fader_midi_commands, mytimer, led, midi, fader_config, fader_processes_midi_command, calibration_request, flash, midi_sender, fader_bidir, fader_bidir_target], priority=1)]
 	fn xmain(mut c : xmain::Context) {
 		static mut BLINK: u64 = 0;
 		static mut FOO: i32 = 0;
@@ -814,7 +861,6 @@ const APP: () = {
 		let res = &mut c.resources;
 		res.mytimer.clear_update_interrupt_flag();
 		
-		res.cs8.set_high().ok();
 		*BLINK += 1;
 		if *BLINK % 100 == 0 {
 			*FOO = (*FOO + 1) % 20;
@@ -832,10 +878,7 @@ const APP: () = {
 
 			res.display.set_draw_area((10,10),(128,64));
 
-			res.cs8.set_low().ok();
 			res.display.flush().ok();
-			res.cs8.set_high().ok();
-
 		}
 
 		let calibration_state = res.calibration_request.lock(|c|*c);
