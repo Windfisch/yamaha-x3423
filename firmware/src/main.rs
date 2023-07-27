@@ -267,7 +267,7 @@ mod shift_register {
 		fn send(&mut self) {
 			self.latch.set_low();
 			for i in 0..8 {
-				self.send_bit(self.value & (1<<i) != 0);
+				self.send_bit(self.value & (1<<(7-i)) != 0);
 			}
 			self.latch.set_high();
 			Self::delay();
@@ -749,9 +749,11 @@ const APP: () = {
 			// Configure the 9th chip select pin
 			let pc14 = gpioc.pc14.into_push_pull_output(&mut gpioc.crh);
 			let cs8 = cortex_m::singleton!(: PC14<Output<PushPull>> = pc14).unwrap();
+			cs8.set_high();
 
 			let mut iter = cs_0to7.iter_mut();
 
+			// FIXME this could be an iterator. we don't really need the array
 			let chip_selects: [&mut (dyn OutputPin<Error = Infallible> + Send); 9] = [
 				iter.next().unwrap(),
 				iter.next().unwrap(),
@@ -769,7 +771,7 @@ const APP: () = {
 
 			let display_dc = shared_gpio::SharedGpio(panic_mutex::new!(gpiob.pb5.into_push_pull_output(&mut gpiob.crl); PB5<Output<PushPull>>));
 			let mut display = ssd1306::Ssd1306::new(
-				ssd1306::prelude::SPIInterface::new(shared_spi.acquire(), display_dc, RefMutOutputPin(chip_selects[8])),
+				ssd1306::prelude::SPIInterface::new(shared_spi.acquire(), display_dc, RefMutOutputPin(chip_selects[2])),
 				ssd1306::size::DisplaySize128x64,
 				ssd1306::rotation::DisplayRotation::Rotate0
 			).into_buffered_graphics_mode();
@@ -870,7 +872,7 @@ const APP: () = {
 
 			
 			let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-			Text::new("Hello Rust!", Point::new(20+*FOO, 30), style).draw(res.display).unwrap();
+			Text::new("Helloo Rust!", Point::new(20+*FOO, 30), style).draw(res.display).unwrap();
 
 			for i in 0..15 {
 				res.display.set_pixel(i, i, true);
