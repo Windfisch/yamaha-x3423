@@ -192,10 +192,11 @@ mod panic_mutex {
 	}
 }
 
-mod shared_spi { 
+mod shared_spi {
 	use super::panic_mutex::PanicMutex;
 	use embedded_hal::blocking::spi::Write;
 
+	#[derive(Clone, Copy)]
 	pub struct SharedSpi<BUS: 'static>(pub &'static PanicMutex<BUS>);
 
 	impl<BUS: Write<u8>> Write<u8> for SharedSpi<BUS> {
@@ -210,7 +211,14 @@ mod shared_gpio {
 	use super::panic_mutex::PanicMutex;
 	use embedded_hal::digital::v2::OutputPin;
 
+	#[derive(Copy)]
 	pub struct SharedGpio<GPIO: 'static>(pub &'static PanicMutex<GPIO>);
+
+	impl<GPIO: 'static> Clone for SharedGpio<GPIO> {
+		fn clone(&self) -> Self {
+			Self(self.0)
+		}
+	}
 
 	impl<GPIO: OutputPin> OutputPin for SharedGpio<GPIO> {
 		type Error = GPIO::Error;
