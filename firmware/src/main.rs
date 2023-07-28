@@ -652,15 +652,17 @@ const APP: () = {
 
 		x3423: X3423,
 
-		display: ssd1306::Ssd1306<
-			ssd1306::prelude::SPIInterface<
-				SharedBus<SpiType>,
-				shared_gpio::SharedGpio<PB5<Output<PushPull>>>,
-				RefMutOutputPin<'static, dyn embedded_hal::digital::v2::OutputPin<Error = Infallible> + Send>
-			>,
-			ssd1306::size::DisplaySize128x64,
-			ssd1306::mode::BufferedGraphicsMode<ssd1306::size::DisplaySize128x64>
-		>,
+		displays: [
+			ssd1306::Ssd1306<
+				ssd1306::prelude::SPIInterface<
+					SharedBus<SpiType>,
+					shared_gpio::SharedGpio<PB5<Output<PushPull>>>,
+					RefMutOutputPin<'static, dyn embedded_hal::digital::v2::OutputPin<Error = Infallible> + Send>
+				>,
+				ssd1306::size::DisplaySize128x64,
+				ssd1306::mode::BufferedGraphicsMode<ssd1306::size::DisplaySize128x64>
+			>; 2
+		],
 
 		faders: [Fader; 17],
 		fader_config: [FaderConfig; 17],
@@ -742,7 +744,7 @@ const APP: () = {
 
 		let shared_spi = shared_bus_rtic::new!(spi, SpiType);
 
-
+		
 		// Configure display
 		let chip_selects = {
 			// Configure shift register
@@ -759,33 +761,40 @@ const APP: () = {
 			let cs8 = cortex_m::singleton!(: PC14<Output<PushPull>> = pc14).unwrap();
 			cs8.set_high();
 
-			let mut iter = cs_0to7.iter_mut();
-
-			// FIXME this could be an iterator. we don't really need the array
-			let chip_selects: [&mut (dyn OutputPin<Error = Infallible> + Send); 9] = [
-				iter.next().unwrap(),
-				iter.next().unwrap(),
-				iter.next().unwrap(),
-				iter.next().unwrap(),
-				iter.next().unwrap(),
-				iter.next().unwrap(),
-				iter.next().unwrap(),
-				iter.next().unwrap(),
-				cs8
-			];
-			chip_selects
+			cs_0to7.iter_mut()
+				.map(|x| x as &mut (dyn OutputPin<Error = Infallible> + Send))
+				.chain(core::iter::once(cs8 as _))
 		};
 
 
 			let display_dc = shared_gpio::SharedGpio(panic_mutex::new!(gpiob.pb5.into_push_pull_output(&mut gpiob.crl); PB5<Output<PushPull>>));
-			let mut display = ssd1306::Ssd1306::new(
-				ssd1306::prelude::SPIInterface::new(shared_spi.acquire(), display_dc, RefMutOutputPin(chip_selects[2])),
-				ssd1306::size::DisplaySize128x64,
-				ssd1306::rotation::DisplayRotation::Rotate0
-			).into_buffered_graphics_mode();
-			use ssd1306::mode::DisplayConfig;
-	
-			display.init().unwrap();
+
+			let mut displays = chip_selects.map(|cs|
+				ssd1306::Ssd1306::new(
+					ssd1306::prelude::SPIInterface::new(shared_spi.acquire(), display_dc.clone(), RefMutOutputPin(cs)),
+					ssd1306::size::DisplaySize128x64,
+					ssd1306::rotation::DisplayRotation::Rotate0
+				)
+			);
+
+			displays.next().unwrap();
+			displays.next().unwrap();
+			let mut displays: [_; 2] = [
+				displays.next().unwrap(),
+				displays.next().unwrap(),
+				//displays.next().unwrap(),
+				/*displays.next().unwrap(),
+				displays.next().unwrap(),
+				displays.next().unwrap(),
+				displays.next().unwrap(),
+				displays.next().unwrap(),
+				displays.next().unwrap(),*/
+			];
+
+			for display in displays.iter_mut() {
+				use ssd1306::mode::DisplayConfig;
+				display.init().unwrap();
+			}
 		//}
 
 		let dac_cs: OldOutputPin<_> = gpioc.pc15.into_push_pull_output_with_state(&mut gpioc.crh, State::High).into();
@@ -837,10 +846,9 @@ const APP: () = {
 			midi_sender: MidiSender::new(),
 			fader_bidir: [FaderStateMachine::new(); 17],
 			fader_bidir_target: [SlewTarget::new(); 17],
-			display
+			displays
 		};
 
-		
 		let writer = resources.flash.writer(stm32f1xx_hal::flash::SectorSize::Sz2K, stm32f1xx_hal::flash::FlashSize::Sz128K);
 		for i in 0..17 {
 			let params = writer.read(65536-2048 + 10*i, 10).unwrap();
@@ -855,10 +863,11 @@ const APP: () = {
 	}
 
 	
-	#[task(binds = TIM2, resources = [x3423, dac, display, delay, faders, fader_midi_commands, mytimer, led, midi, fader_config, fader_processes_midi_command, calibration_request, flash, midi_sender, fader_bidir, fader_bidir_target], priority=1)]
+	#[task(binds = TIM2, resources = [x3423, dac, displays, delay, faders, fader_midi_commands, mytimer, led, midi, fader_config, fader_processes_midi_command, calibration_request, flash, midi_sender, fader_bidir, fader_bidir_target], priority=1)]
 	fn xmain(mut c : xmain::Context) {
 		static mut BLINK: u64 = 0;
 		static mut FOO: i32 = 0;
+
 
 		use embedded_graphics::{
 			pixelcolor::BinaryColor,
@@ -876,19 +885,22 @@ const APP: () = {
 			*FOO = (*FOO + 1) % 20;
 			res.led.toggle().unwrap();
 
-			res.display.clear(BinaryColor::Off);
+			let display = &mut res.displays[0];
 
-			
+			display.clear(BinaryColor::Off);
+
+			/*	
 			let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-			Text::new("Helloo Rust!", Point::new(20+*FOO, 30), style).draw(res.display).unwrap();
+			Text::new("Hello Rust!", Point::new(20+*FOO, 30), style).draw(display).ok();
 
 			for i in 0..15 {
-				res.display.set_pixel(i, i, true);
+				display.set_pixel(i, i, true);
 			}
 
-			res.display.set_draw_area((10,10),(128,64));
+			display.set_draw_area((10,10),(128,64));
 
-			res.display.flush().ok();
+			display.flush().ok();
+			*/
 		}
 
 		let calibration_state = res.calibration_request.lock(|c|*c);
