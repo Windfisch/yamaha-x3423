@@ -27,6 +27,10 @@ shared-bus-rtic = "0.2.2"
 #noop-bus-mutex = { git="https://github.com/Windfisch/noop-bus-mutex" }
 mcp49xx = "0.1.0"
 embedded-graphics = "0.8"
+embedded-graphics-framebuf = "0.5.0"
+
+arrform = "0.1.1"
+
 
 [profile.dev]
 opt-level = 0

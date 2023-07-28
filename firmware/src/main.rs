@@ -2,6 +2,7 @@
 #![no_std]
 
 use core::convert::Infallible;
+use arrform::{arrform, ArrForm};
 
 mod x3423;
 mod fader;
@@ -636,6 +637,83 @@ pub enum FaderConfig {
 	Bidirectional,
 }
 
+
+pub mod framebuffer {
+	use embedded_graphics::draw_target::DrawTarget;
+	use embedded_graphics::pixelcolor::BinaryColor;
+	use embedded_graphics::Pixel;
+	use embedded_graphics::geometry::Size;
+	use embedded_graphics::geometry::OriginDimensions;
+	use embedded_graphics::geometry::Dimensions;
+	use ssd1306::size::DisplaySize;
+	use ssd1306::size::NewZeroed;
+
+	/// The bit ordering is such that it works with AddrMode::Horizontal.
+	pub struct Ssd1306Framebuffer<SIZE: DisplaySize> {
+		data: SIZE::Buffer,
+	}
+
+	impl<SIZE: DisplaySize> Ssd1306Framebuffer<SIZE> {
+		pub fn new() -> Self {
+			Self {
+				data: SIZE::Buffer::new_zeroed()
+			}
+		}
+
+		pub fn data(&self) -> &SIZE::Buffer {
+			&self.data
+		}
+
+		pub fn set_pixel(&mut self, x: u32, y: u32, value: bool) {
+			let value = value as u8;
+
+			let idx = ((y as usize) / 8 * SIZE::WIDTH as usize) + (x as usize);
+			let bit = y % 8;
+
+			if let Some(byte) = self.data.as_mut().get_mut(idx) {
+				*byte = *byte & !(1 << bit) | (value << bit)
+			}
+		}
+	}
+
+	impl<SIZE: DisplaySize> DrawTarget for Ssd1306Framebuffer<SIZE> {
+		type Color = BinaryColor;
+		type Error = core::convert::Infallible;
+
+		fn draw_iter<I>(&mut self, pixels: I) -> Result<(), Self::Error>
+		where
+			I: IntoIterator<Item = Pixel<Self::Color>>,
+		{
+			let bb = self.bounding_box();
+
+			pixels
+				.into_iter()
+				.filter(|Pixel(pos, _color)| bb.contains(*pos))
+				.for_each(|Pixel(pos, color)| {
+					self.set_pixel(pos.x as u32, pos.y as u32, color.is_on())
+				});
+
+			Ok(())
+		}
+
+		fn clear(&mut self, color: Self::Color) -> Result<(), Self::Error> {
+			self.data.as_mut().fill(match color {
+				BinaryColor::On => 0xFF,
+				BinaryColor::Off => 0x00,
+			});
+			Ok(())
+		}
+	}
+	
+	impl<SIZE: DisplaySize> OriginDimensions for Ssd1306Framebuffer<SIZE>
+	{
+		fn size(&self) -> Size {
+			Size::new(SIZE::WIDTH.into(), SIZE::HEIGHT.into())
+		}
+	}
+}
+
+
 type SpiType = spi::Spi<stm32f1xx_hal::pac::SPI2, spi::Spi2NoRemap, (PB13<Alternate<PushPull>>, spi::NoMiso, PB15<Alternate<PushPull>>), u8>;
 
 #[app(device = stm32f1xx_hal::pac, peripherals = true)]
@@ -660,8 +738,8 @@ const APP: () = {
 					RefMutOutputPin<'static, dyn embedded_hal::digital::v2::OutputPin<Error = Infallible> + Send>
 				>,
 				ssd1306::size::DisplaySize128x64,
-				ssd1306::mode::BufferedGraphicsMode<ssd1306::size::DisplaySize128x64>
-			>; 2
+				ssd1306::mode::BasicMode,
+			>; 9
 		],
 
 		faders: [Fader; 17],
@@ -744,28 +822,27 @@ const APP: () = {
 
 		let shared_spi = shared_bus_rtic::new!(spi, SpiType);
 
-		
-		// Configure display
-		let chip_selects = {
-			// Configure shift register
-			let shiftreg_data = gpioa.pa1.into_push_pull_output(&mut gpioa.crl);
-			let shiftreg_clock = gpioa.pa0.into_push_pull_output(&mut gpioa.crl); // on black pill, this is pb10
-			let shiftreg_latch = gpiob.pb14.into_push_pull_output(&mut gpiob.crh);
-			let shift_register = shift_register::ShiftRegister::new(shiftreg_latch, shiftreg_clock, shiftreg_data, 0xFF);
-			let cs_0to7 = cortex_m::singleton!(: [ShiftRegisterPin; 8] = {
-				shift_register::ShiftRegister::split(panic_mutex::new!(shift_register; ShiftRegisterType))
-			}).unwrap();
-		
-			// Configure the 9th chip select pin
-			let pc14 = gpioc.pc14.into_push_pull_output(&mut gpioc.crh);
-			let cs8 = cortex_m::singleton!(: PC14<Output<PushPull>> = pc14).unwrap();
-			cs8.set_high();
+		let mut displays = {
+			// Configure display
+			let chip_selects = {
+				// Configure shift register
+				let shiftreg_data = gpioa.pa1.into_push_pull_output(&mut gpioa.crl);
+				let shiftreg_clock = gpioa.pa0.into_push_pull_output(&mut gpioa.crl); // on black pill, this is pb10
+				let shiftreg_latch = gpiob.pb14.into_push_pull_output(&mut gpiob.crh);
+				let shift_register = shift_register::ShiftRegister::new(shiftreg_latch, shiftreg_clock, shiftreg_data, 0xFF);
+				let cs_0to7 = cortex_m::singleton!(: [ShiftRegisterPin; 8] = {
+					shift_register::ShiftRegister::split(panic_mutex::new!(shift_register; ShiftRegisterType))
+				}).unwrap();
+			
+				// Configure the 9th chip select pin
+				let pc14 = gpioc.pc14.into_push_pull_output(&mut gpioc.crh);
+				let cs8 = cortex_m::singleton!(: PC14<Output<PushPull>> = pc14).unwrap();
+				cs8.set_high();
 
-			cs_0to7.iter_mut()
-				.map(|x| x as &mut (dyn OutputPin<Error = Infallible> + Send))
-				.chain(core::iter::once(cs8 as _))
-		};
-
+				cs_0to7.iter_mut()
+					.map(|x| x as &mut (dyn OutputPin<Error = Infallible> + Send))
+					.chain(core::iter::once(cs8 as _))
+			};
 
 			let display_dc = shared_gpio::SharedGpio(panic_mutex::new!(gpiob.pb5.into_push_pull_output(&mut gpiob.crl); PB5<Output<PushPull>>));
 
@@ -777,25 +854,24 @@ const APP: () = {
 				)
 			);
 
-			displays.next().unwrap();
-			displays.next().unwrap();
-			let mut displays: [_; 2] = [
-				displays.next().unwrap(),
-				displays.next().unwrap(),
-				//displays.next().unwrap(),
-				/*displays.next().unwrap(),
+			let displays: [_; 9] = [
 				displays.next().unwrap(),
 				displays.next().unwrap(),
 				displays.next().unwrap(),
 				displays.next().unwrap(),
-				displays.next().unwrap(),*/
+				displays.next().unwrap(),
+				displays.next().unwrap(),
+				displays.next().unwrap(),
+				displays.next().unwrap(),
+				displays.next().unwrap(),
 			];
 
-			for display in displays.iter_mut() {
-				use ssd1306::mode::DisplayConfig;
-				display.init().unwrap();
-			}
-		//}
+			displays
+		};
+
+		for display in displays.iter_mut() {
+			display.init_with_addr_mode(ssd1306::command::AddrMode::Horizontal).unwrap();
+		}
 
 		let dac_cs: OldOutputPin<_> = gpioc.pc15.into_push_pull_output_with_state(&mut gpioc.crh, State::High).into();
 		let dac = mcp49xx::Mcp49xx::new_mcp4822(shared_spi.acquire(), dac_cs);
@@ -876,6 +952,7 @@ const APP: () = {
 			primitives::{Circle, PrimitiveStyleBuilder, Rectangle, Triangle},
 			text::Text,
 		};
+		use embedded_graphics::geometry::Point;
 
 		let res = &mut c.resources;
 		res.mytimer.clear_update_interrupt_flag();
@@ -885,22 +962,21 @@ const APP: () = {
 			*FOO = (*FOO + 1) % 20;
 			res.led.toggle().unwrap();
 
-			let display = &mut res.displays[0];
+			//let mut framebuffer = embedded_graphics::framebuffer::Framebuffer::<BinaryColor, _, (), 64, 128, 1024>::new();
+			let mut framebuffer = framebuffer::Ssd1306Framebuffer::<ssd1306::size::DisplaySize128x64>::new();
 
-			display.clear(BinaryColor::Off);
-
-			/*	
+			
 			let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-			Text::new("Hello Rust!", Point::new(20+*FOO, 30), style).draw(display).ok();
+			//let text = arrform::arrform!(32, "Hello Rust {}", i);
+			Text::new("Hello Rust!", Point::new(20+*FOO, 30), style).draw(&mut framebuffer).ok();
 
 			for i in 0..15 {
-				display.set_pixel(i, i, true);
+				framebuffer.set_pixel(i,i, true);
 			}
-
-			display.set_draw_area((10,10),(128,64));
-
-			display.flush().ok();
-			*/
+			
+			for display in res.displays.iter_mut() {
+				display.draw(framebuffer.data()).ok();
+			}
 		}
 
 		let calibration_state = res.calibration_request.lock(|c|*c);
