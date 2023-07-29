@@ -962,19 +962,18 @@ const APP: () = {
 			*FOO = (*FOO + 1) % 20;
 			res.led.toggle().unwrap();
 
-			//let mut framebuffer = embedded_graphics::framebuffer::Framebuffer::<BinaryColor, _, (), 64, 128, 1024>::new();
-			let mut framebuffer = framebuffer::Ssd1306Framebuffer::<ssd1306::size::DisplaySize128x64>::new();
+			for (i, display) in res.displays.iter_mut().enumerate() {
+				let mut framebuffer = framebuffer::Ssd1306Framebuffer::<ssd1306::size::DisplaySize128x64>::new();
 
-			
-			let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-			//let text = arrform::arrform!(32, "Hello Rust {}", i);
-			Text::new("Hello Rust!", Point::new(20+*FOO, 30), style).draw(&mut framebuffer).ok();
+				
+				let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+				let text = arrform::arrform!(32, "Hello Rust {}", i);
+				Text::new(text.as_str(), Point::new(20+*FOO, 30), style).draw(&mut framebuffer).ok();
 
-			for i in 0..15 {
-				framebuffer.set_pixel(i,i, true);
-			}
+				for i in 0..15 {
+					framebuffer.set_pixel(i,i, true);
+				}
 			
-			for display in res.displays.iter_mut() {
 				display.draw(framebuffer.data()).ok();
 			}
 		}
