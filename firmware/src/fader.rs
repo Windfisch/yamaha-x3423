@@ -2,6 +2,7 @@ use micromath::F32Ext;
 
 enum FaderCalibrationPhase {
 	NotCalibrating,
+	Failed,
 	Init,
 	ApproachMin,
 	ApproachMidFromBelow,
@@ -9,6 +10,12 @@ enum FaderCalibrationPhase {
 	ApproachMidFromAbove,
 	Approach75FromBelow,
 	Approach25FromAbove
+}
+
+pub enum CalibrationStatus {
+	Ok,
+	Failed,
+	Processing,
 }
 
 pub struct Fader {
@@ -83,7 +90,16 @@ impl Fader {
 	pub fn is_calibrating(&self) -> bool {
 		match self.calibration_phase {
 			FaderCalibrationPhase::NotCalibrating => false,
+			FaderCalibrationPhase::Failed => false,
 			_ => true
+		}
+	}
+
+	pub fn calibration_status(&self) -> CalibrationStatus {
+		match self.calibration_phase {
+			FaderCalibrationPhase::NotCalibrating => CalibrationStatus::Ok,
+			FaderCalibrationPhase::Failed => CalibrationStatus::Failed,
+			_ => CalibrationStatus::Processing,
 		}
 	}
 
@@ -101,8 +117,8 @@ impl Fader {
 	}
 
 	fn cook_raw_read_value(&self, raw: u16) -> f32 {
-		if raw < self.read_low { 0. }
-		else if raw > self.read_high { 1. }
+		if raw <= self.read_low { 0. }
+		else if raw >= self.read_high { 1. }
 		else {(raw - self.read_low) as f32 / ((self.read_high - self.read_low) as f32)}
 	}
 
@@ -119,30 +135,25 @@ impl Fader {
 	}
 	pub fn set_target(&mut self, target: f32) {
 		const TIMEOUT: u32 = 500;
-		match self.calibration_phase {
-			FaderCalibrationPhase::NotCalibrating => {
-				self.target_value = Some(target.clamp(0., 1.));
-				self.time_left = TIMEOUT;
-			}
-			_ => {}
+		if !self.is_calibrating() {
+			self.target_value = Some(target.clamp(0., 1.));
+			self.time_left = TIMEOUT;
 		}
 	}
 	pub fn clear_target(&mut self) {
-		match self.calibration_phase {
-			FaderCalibrationPhase::NotCalibrating => {
-				self.target_value = None;
-			}
-			_ => {}
+		if !self.is_calibrating() {
+			self.target_value = None;
 		}
 	}
 	pub fn target(&self) -> Option<f32> {
 		self.target_value
 	}
 	pub fn process(&mut self) -> Option<u16> {
-		use FaderCalibrationPhase::*;
-		match self.calibration_phase {
-			NotCalibrating => self.process_normal(),
-			_ => self.process_calibration()
+		if !self.is_calibrating() {
+			self.process_normal()
+		}
+		else {
+			self.process_calibration()
 		}
 	}
 
@@ -205,14 +216,26 @@ impl Fader {
 					let v75_cooked = self.cook_raw_read_value(v75_from_below + read_deadzone);
 					let v25_cooked = self.cook_raw_read_value(self.v25_from_above - read_deadzone);
 
-					let gain = (WRITE_75_APPROX - WRITE_25_APPROX) as f32 / (v75_cooked - v25_cooked);
-					assert!(0. < gain);
-					self.write_low = WRITE_25_APPROX - ((v25_cooked * gain) as u16);
-					self.write_high = self.write_low + (gain as u16);
-					self.write_deadzone = ((self.cook_raw_read_value(self.mid_from_above) - self.cook_raw_read_value(self.mid_from_below)) * gain) as u16;
+					// should be approximately 0.5, but can deviate because the WRITE_xx_APPROX setpoints are just coarsely guesstimated.
+					let distance = v75_cooked - v25_cooked; 
+					
+					if distance < 0.1 {
+						// this is definitely unplausible. calibration has failed.
+						// we'll use some default values just for the sake of having something remotely plausible, yet wrong
+						self.write_low = WRITE_25_APPROX;
+						self.write_high = WRITE_75_APPROX;
+						self.write_deadzone = 0;
+						self.calibration_phase = Failed;
+					}
+					else {
+						let gain = (WRITE_75_APPROX - WRITE_25_APPROX) as f32 / distance;
+						assert!(0. < gain);
+						self.write_low = WRITE_25_APPROX - ((v25_cooked * gain) as u16);
+						self.write_high = self.write_low + (gain as u16);
+						self.write_deadzone = ((self.cook_raw_read_value(self.mid_from_above) - self.cook_raw_read_value(self.mid_from_below)).max(0.0) * gain) as u16;
+						self.calibration_phase = NotCalibrating;
+					}
 
-
-					self.calibration_phase = NotCalibrating;
 				}
 				Some(WRITE_75_APPROX)
 			}

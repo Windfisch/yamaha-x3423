@@ -949,7 +949,6 @@ const APP: () = {
 			pixelcolor::BinaryColor,
 			mono_font::{ascii::FONT_6X10, MonoTextStyle},
 			prelude::*,
-			primitives::{Circle, PrimitiveStyleBuilder, Rectangle, Triangle},
 			text::Text,
 		};
 		use embedded_graphics::geometry::Point;
@@ -967,8 +966,29 @@ const APP: () = {
 
 				
 				let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-				let text = arrform::arrform!(32, "Hello Rust {}", i);
+				let text = arrform!(32, "Hello Rust {}", i);
 				Text::new(text.as_str(), Point::new(20+*FOO, 30), style).draw(&mut framebuffer).ok();
+		
+				let calibration_state = match res.calibration_request.lock(|c|*c) {
+					Calib::Running => "CAL",
+					_ => "cal"
+				};
+
+				let calib_status_str = |status: fader::CalibrationStatus| match status {
+					fader::CalibrationStatus::Ok => "o",
+					fader::CalibrationStatus::Processing => "p",
+					fader::CalibrationStatus::Failed => "f",
+				};
+
+				let mut faderinfo = arrform::ArrForm::<48>::new();
+				use core::fmt::Write;
+				write!(faderinfo, "{} ", calibration_state);
+
+				for fader in res.faders.iter() {
+					write!(faderinfo, "{}", calib_status_str(fader.calibration_status()));
+				}
+
+				Text::new(faderinfo.as_str(), Point::new(2, 50), style).draw(&mut framebuffer).ok();
 
 				for i in 0..15 {
 					framebuffer.set_pixel(i,i, true);
@@ -990,7 +1010,6 @@ const APP: () = {
 		let faders = &mut res.faders;
 		res.x3423.read_values(|idx, value| { faders[idx].update_value(value) }, res.delay);
 
-/*
 		// do all the fader processing
 		if calibration_state == Calib::Idle {
 			let faders = &mut res.faders;
@@ -1110,7 +1129,6 @@ const APP: () = {
 			}
 			Calib::Idle => {}
 		}
-		*/
 	}
 
 	#[task(binds = USB_LP_CAN_RX0, resources=[midi, usb_dev, fader_midi_commands, fader_config, calibration_request], priority=2)]
@@ -1156,8 +1174,6 @@ const APP: () = {
 				}
 			}
 		}
-
-		
 	}
 	
 	extern "C" {
