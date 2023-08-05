@@ -6,6 +6,7 @@ use arrform::{arrform, ArrForm};
 
 mod x3423;
 mod fader;
+mod sysex_buffer;
 use x3423::X3423;
 use fader::Fader;
 
@@ -728,6 +729,8 @@ const APP: () = {
 		midi: usbd_midi::midi_device::MidiClass<'static, UsbBus<Peripheral>>,
 		dac: Mcp49xx<SpiInterface<SharedBus<SpiType>, OldOutputPin<PC15<Output<PushPull>>>>, Resolution12Bit, DualChannel, Unbuffered>,
 
+		sysex_buffer: sysex_buffer::SysexBuffer<1200>, // 1175 bytes should be enough but let's not gamble here.
+
 		x3423: X3423,
 
 		displays: [
@@ -922,7 +925,8 @@ const APP: () = {
 			midi_sender: MidiSender::new(),
 			fader_bidir: [FaderStateMachine::new(); 17],
 			fader_bidir_target: [SlewTarget::new(); 17],
-			displays
+			displays,
+			sysex_buffer: sysex_buffer::SysexBuffer::new()
 		};
 
 		let writer = resources.flash.writer(stm32f1xx_hal::flash::SectorSize::Sz2K, stm32f1xx_hal::flash::FlashSize::Sz128K);
@@ -939,7 +943,7 @@ const APP: () = {
 	}
 
 	
-	#[task(binds = TIM2, resources = [x3423, dac, displays, delay, faders, fader_midi_commands, mytimer, led, midi, fader_config, fader_processes_midi_command, calibration_request, flash, midi_sender, fader_bidir, fader_bidir_target], priority=1)]
+	#[task(binds = TIM2, resources = [x3423, dac, delay, faders, fader_midi_commands, mytimer, led, midi, fader_config, fader_processes_midi_command, calibration_request, flash, midi_sender, fader_bidir, fader_bidir_target], priority=1)]
 	fn xmain(mut c : xmain::Context) {
 		static mut BLINK: u64 = 0;
 		static mut FOO: i32 = 0;
@@ -960,7 +964,7 @@ const APP: () = {
 		if *BLINK % 100 == 0 {
 			*FOO = (*FOO + 1) % 20;
 			res.led.toggle().unwrap();
-
+/*
 			for (i, display) in res.displays.iter_mut().enumerate() {
 				let mut framebuffer = framebuffer::Ssd1306Framebuffer::<ssd1306::size::DisplaySize128x64>::new();
 
@@ -995,7 +999,7 @@ const APP: () = {
 				}
 			
 				display.draw(framebuffer.data()).ok();
-			}
+			}*/
 		}
 
 		let calibration_state = res.calibration_request.lock(|c|*c);
@@ -1131,7 +1135,7 @@ const APP: () = {
 		}
 	}
 
-	#[task(binds = USB_LP_CAN_RX0, resources=[midi, usb_dev, fader_midi_commands, fader_config, calibration_request], priority=2)]
+	#[task(binds = USB_LP_CAN_RX0, resources=[midi, usb_dev, fader_midi_commands, fader_config, calibration_request, sysex_buffer, displays], priority=2)]
 	fn periodic_usb_poll(c : periodic_usb_poll::Context) {
 		static mut LSB: [u8; 17] = [0; 17];
 
@@ -1145,7 +1149,7 @@ const APP: () = {
 					let messagetype = message[0] & 0x0F;
 
 					match messagetype {
-						0xB => {
+						0xB => { // control change
 							//let channel = message[1] & 0x0F;
 							let cc = message[2];
 							let value = message[3];
@@ -1167,6 +1171,20 @@ const APP: () = {
 
 							if cc == 100 {
 								*c.resources.calibration_request = Calib::Pending;
+							}
+						}
+						0x4 | 0x5 | 0x6 | 0x7 => {
+							let result = c.resources.sysex_buffer.push_midi(messagetype, &message);
+							if let Some(sysex) = result {
+								// F0 <3 bytes vendor id> <1 byte display id> <1171 bytes data> F7
+								if sysex.len() == 1177 && sysex[0..4] == [0xF0, 0x00, 0x13, 0x37] {
+									let display_id = sysex[4] as usize;
+
+									if display_id < 9 {
+										let data = sysex_buffer::bitsquash_inplace(&mut sysex[5..1176]);
+										c.resources.displays[display_id].draw(data).ok();
+									}
+								}
 							}
 						}
 						_ => {}
