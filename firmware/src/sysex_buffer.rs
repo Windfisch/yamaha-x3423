@@ -1,6 +1,7 @@
 pub struct SysexBuffer<const N: usize> {
 	buffer: [u8; N],
 	len: usize,
+	done: bool,
 }
 
 impl<const N: usize> SysexBuffer<N> {
@@ -8,16 +9,22 @@ impl<const N: usize> SysexBuffer<N> {
 		Self {
 			buffer: [0; N],
 			len: 0,
+			done: false,
 		}
 	}
 
-	pub fn push_midi(&mut self, usb_type: u8, message: &[u8]) -> Option<&mut [u8]> {
+	/// Returns true when a sysex has finished receiving, false otherwise.
+	pub fn push_midi(&mut self, usb_type: u8, message: &[u8]) -> bool {
+		if self.done {
+			return true;
+		}
+
 		let (len, done) = match usb_type {
 			0x4 => (3, false),
 			0x5 => (1, true),
 			0x6 => (2, true),
 			0x7 => (3, true),
-			_ => return None
+			_ => return false
 		};
 
 		for i in 0..len {
@@ -28,16 +35,24 @@ impl<const N: usize> SysexBuffer<N> {
 		}
 
 		if done {
-			let total_len = self.len;
-			self.len = 0;
-
-			if total_len <= N {
-				Some(&mut self.buffer[0..total_len])
+			if self.len > N {
+				// if the sysex was too long for our buffer, just discard it.
+				self.len = 0;
 			}
 			else {
-				// if the sysex was too long for our buffer, just discard it.
-				None
+				self.done = true;
 			}
+		}
+
+		self.done
+	}
+
+	pub fn get(&mut self) -> Option<&mut [u8]> {
+		if self.done {
+			let len = self.len;
+			self.len = 0;
+			self.done = false;
+			Some(&mut self.buffer[0..len])
 		}
 		else {
 			None

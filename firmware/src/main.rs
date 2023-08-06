@@ -2,7 +2,6 @@
 #![no_std]
 
 use core::convert::Infallible;
-use arrform::{arrform, ArrForm};
 
 mod x3423;
 mod fader;
@@ -26,12 +25,18 @@ use mcp49xx::marker::Resolution12Bit;
 use mcp49xx::marker::DualChannel;
 use mcp49xx::marker::Unbuffered;
 use stm32f1xx_hal::time::Hertz;
+use core::sync::atomic::AtomicBool;
+use core::sync::atomic::Ordering;
 
 use shared_bus_rtic::SharedBus;
 
 use usb_device::prelude::*;
 
 use micromath::F32Ext;
+
+use sysex_buffer::SysexBuffer;
+
+const SYSEX_BUFFER_SIZE: usize = 1177;
 
 pub struct RefMutOutputPin<'a, T: OutputPin + ?Sized>(pub &'a mut T);
 
@@ -79,7 +84,15 @@ mod panic_mutex {
 		///
 		/// Panics if the lock is already held by another guard.
 		pub fn lock(&self) -> PanicMutexGuard<'_, T> {
-			PanicMutexGuard::new(self)
+			self.try_lock().expect("Tried to lock already-locked mutex")
+		}
+
+		/// Tries to lock the mutex and returns a `PanicMutexGuard` if successful.
+		/// The mutex stays locked for the guard's lifetime.
+		///
+		/// Returns `None` if the lock is already held by another guard.
+		pub fn try_lock(&self) -> Option<PanicMutexGuard<'_, T>> {
+			PanicMutexGuard::try_new(self)
 		}
 
 		/// Locks the mutex, applies the `f` function to its data, unlocks and
@@ -112,16 +125,16 @@ mod panic_mutex {
 	impl<'a, T: 'a> PanicMutexGuard<'a, T> {
 		// SAFETY: This is the only constructor and thus ensures that only one guard
 		// can exist for a given PanicMutex.
-		fn new(parent: &'a PanicMutex<T>) -> Self {
+		fn try_new(parent: &'a PanicMutex<T>) -> Option<Self> {
 			if
 				atomic::compare_exchange(&parent.busy, false, true, Ordering::SeqCst, Ordering::SeqCst)
 					.is_err() {
-				panic!("PanicMutex conflict");
+				return None;
 			}
 
-			Self {
+			Some(Self {
 				parent
-			}
+			})
 		}
 	}
 
@@ -714,7 +727,6 @@ pub mod framebuffer {
 	}
 }
 
-
 type SpiType = spi::Spi<stm32f1xx_hal::pac::SPI2, spi::Spi2NoRemap, (PB13<Alternate<PushPull>>, spi::NoMiso, PB15<Alternate<PushPull>>), u8>;
 
 #[app(device = stm32f1xx_hal::pac, peripherals = true)]
@@ -729,7 +741,10 @@ const APP: () = {
 		midi: usbd_midi::midi_device::MidiClass<'static, UsbBus<Peripheral>>,
 		dac: Mcp49xx<SpiInterface<SharedBus<SpiType>, OldOutputPin<PC15<Output<PushPull>>>>, Resolution12Bit, DualChannel, Unbuffered>,
 
-		sysex_buffer: sysex_buffer::SysexBuffer<1200>, // 1175 bytes should be enough but let's not gamble here.
+		sysex_buffer_mainthread: &'static panic_mutex::PanicMutex<SysexBuffer<SYSEX_BUFFER_SIZE>>,
+		sysex_buffer_usb: &'static panic_mutex::PanicMutex<SysexBuffer<SYSEX_BUFFER_SIZE>>,
+		sysex_processing_usb: &'static AtomicBool,
+		sysex_processing_mainthread: &'static AtomicBool,
 
 		x3423: X3423,
 
@@ -760,6 +775,7 @@ const APP: () = {
 
 	#[init]
 	fn init(cx: init::Context) -> init::LateResources {
+		static mut SYSEX_PROCESSING: AtomicBool = AtomicBool::new(false);
 		static mut USB_BUS: Option<usb_device::bus::UsbBusAllocator<UsbBusType>> = None;
 
 		// Enable cycle counter
@@ -886,6 +902,9 @@ const APP: () = {
 			.start_count_down(Hertz(1000));
 		mytimer.listen(timer::Event::Update);
 
+		let sysex_buffer_mainthread = panic_mutex::new!(SysexBuffer::new(); SysexBuffer<SYSEX_BUFFER_SIZE>);
+		let sysex_buffer_usb = sysex_buffer_mainthread;
+
 		let mut resources = init::LateResources {
 			led,
 			x3423: X3423::new(x3423::X3423Resources {
@@ -926,7 +945,10 @@ const APP: () = {
 			fader_bidir: [FaderStateMachine::new(); 17],
 			fader_bidir_target: [SlewTarget::new(); 17],
 			displays,
-			sysex_buffer: sysex_buffer::SysexBuffer::new()
+			sysex_buffer_mainthread,
+			sysex_buffer_usb,
+			sysex_processing_usb: SYSEX_PROCESSING,
+			sysex_processing_mainthread: SYSEX_PROCESSING,
 		};
 
 		let writer = resources.flash.writer(stm32f1xx_hal::flash::SectorSize::Sz2K, stm32f1xx_hal::flash::FlashSize::Sz128K);
@@ -943,19 +965,11 @@ const APP: () = {
 	}
 
 	
-	#[task(binds = TIM2, resources = [x3423, dac, delay, faders, fader_midi_commands, mytimer, led, midi, fader_config, fader_processes_midi_command, calibration_request, flash, midi_sender, fader_bidir, fader_bidir_target], priority=1)]
+	#[task(binds = TIM2, resources = [x3423, dac, displays, delay, faders, fader_midi_commands, mytimer, led, midi, fader_config, fader_processes_midi_command, calibration_request, flash, midi_sender, fader_bidir, fader_bidir_target, sysex_buffer_mainthread, sysex_processing_mainthread], priority=1)]
 	fn xmain(mut c : xmain::Context) {
 		static mut BLINK: u64 = 0;
 		static mut FOO: i32 = 0;
 
-
-		use embedded_graphics::{
-			pixelcolor::BinaryColor,
-			mono_font::{ascii::FONT_6X10, MonoTextStyle},
-			prelude::*,
-			text::Text,
-		};
-		use embedded_graphics::geometry::Point;
 
 		let res = &mut c.resources;
 		res.mytimer.clear_update_interrupt_flag();
@@ -964,42 +978,6 @@ const APP: () = {
 		if *BLINK % 100 == 0 {
 			*FOO = (*FOO + 1) % 20;
 			res.led.toggle().unwrap();
-/*
-			for (i, display) in res.displays.iter_mut().enumerate() {
-				let mut framebuffer = framebuffer::Ssd1306Framebuffer::<ssd1306::size::DisplaySize128x64>::new();
-
-				
-				let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
-				let text = arrform!(32, "Hello Rust {}", i);
-				Text::new(text.as_str(), Point::new(20+*FOO, 30), style).draw(&mut framebuffer).ok();
-		
-				let calibration_state = match res.calibration_request.lock(|c|*c) {
-					Calib::Running => "CAL",
-					_ => "cal"
-				};
-
-				let calib_status_str = |status: fader::CalibrationStatus| match status {
-					fader::CalibrationStatus::Ok => "o",
-					fader::CalibrationStatus::Processing => "p",
-					fader::CalibrationStatus::Failed => "f",
-				};
-
-				let mut faderinfo = arrform::ArrForm::<48>::new();
-				use core::fmt::Write;
-				write!(faderinfo, "{} ", calibration_state);
-
-				for fader in res.faders.iter() {
-					write!(faderinfo, "{}", calib_status_str(fader.calibration_status()));
-				}
-
-				Text::new(faderinfo.as_str(), Point::new(2, 50), style).draw(&mut framebuffer).ok();
-
-				for i in 0..15 {
-					framebuffer.set_pixel(i,i, true);
-				}
-			
-				display.draw(framebuffer.data()).ok();
-			}*/
 		}
 
 		let calibration_state = res.calibration_request.lock(|c|*c);
@@ -1133,9 +1111,26 @@ const APP: () = {
 			}
 			Calib::Idle => {}
 		}
+
+		// handle the display update sysex
+		if res.sysex_processing_mainthread.load(Ordering::Relaxed) == true {
+			let mut sysex_buffer = res.sysex_buffer_mainthread.lock();
+			let sysex = sysex_buffer.get().expect("usb thread signalled that a sysex was received but there wasn't");
+
+			// F0 <3 bytes vendor id> <1 byte display id> <1171 bytes data> F7
+			if sysex.len() == 1177 && sysex[0..4] == [0xF0, 0x00, 0x13, 0x37] {
+				let display_id = sysex[4] as usize;
+				if display_id < 9 {
+					let data = sysex_buffer::bitsquash_inplace(&mut sysex[5..1176]);
+					res.displays[display_id].draw(data).ok();
+				}
+			}
+			core::mem::drop(sysex_buffer); // drop the lock guard before signalling "done" to the usb task
+			res.sysex_processing_mainthread.store(false, Ordering::Relaxed);
+		}
 	}
 
-	#[task(binds = USB_LP_CAN_RX0, resources=[midi, usb_dev, fader_midi_commands, fader_config, calibration_request, sysex_buffer, displays], priority=2)]
+	#[task(binds = USB_LP_CAN_RX0, resources=[midi, usb_dev, fader_midi_commands, fader_config, calibration_request, sysex_buffer_usb, sysex_processing_usb], priority=2)]
 	fn periodic_usb_poll(c : periodic_usb_poll::Context) {
 		static mut LSB: [u8; 17] = [0; 17];
 
@@ -1174,16 +1169,11 @@ const APP: () = {
 							}
 						}
 						0x4 | 0x5 | 0x6 | 0x7 => {
-							let result = c.resources.sysex_buffer.push_midi(messagetype, &message);
-							if let Some(sysex) = result {
-								// F0 <3 bytes vendor id> <1 byte display id> <1171 bytes data> F7
-								if sysex.len() == 1177 && sysex[0..4] == [0xF0, 0x00, 0x13, 0x37] {
-									let display_id = sysex[4] as usize;
-
-									if display_id < 9 {
-										let data = sysex_buffer::bitsquash_inplace(&mut sysex[5..1176]);
-										c.resources.displays[display_id].draw(data).ok();
-									}
+							if c.resources.sysex_processing_usb.load(Ordering::Relaxed) == false {
+								let mut sysex_buffer = c.resources.sysex_buffer_usb.lock();
+								let done_receiving = sysex_buffer.push_midi(messagetype, &message);
+								if done_receiving {
+									c.resources.sysex_processing_usb.store(true, Ordering::Relaxed);
 								}
 							}
 						}
