@@ -391,14 +391,14 @@ pub enum FaderState {
 
 #[derive(Clone, Copy)]
 pub struct Queue {
-	history: [u16; 64],
+	history: [u16; 32],
 	pointer: usize,
 	counter: u16
 }
 
 impl Queue {
-	const SPARSITY: u16 = 24;
-	pub const fn new() -> Queue { Queue { history: [0; 64], pointer: 0, counter: 0 } }
+	const SPARSITY: u16 = 48;
+	pub const fn new() -> Queue { Queue { history: [0; 32], pointer: 0, counter: 0 } }
 
 	fn u16_to_f32(value: u16) -> f32 {
 		value as f32 / 65535.0
